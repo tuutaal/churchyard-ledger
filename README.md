@@ -30,14 +30,12 @@ The name points to the Christian hope confessed in the resurrection of the body 
 
 ## Initial Stack
 
-- Next.js
-- TypeScript
-- Tailwind CSS
-- shadcn/ui conventions
+- PHP 8.1+
 - MySQL
-- Drizzle ORM
-- Docker Compose
-- Leaflet or MapLibre for maps
+- PDO
+- cPanel-compatible shared hosting
+- No Composer dependency for the first release
+- Leaflet or MapLibre for maps later
 
 ## Architecture Notes
 
@@ -57,48 +55,15 @@ The initial schema includes:
 
 ## Local Development
 
-Copy the environment file:
+Use any local PHP/MySQL environment such as XAMPP, MAMP, Laragon, or your editor's PHP server.
 
-```bash
-cp .env.example .env
+Create a MySQL database, copy `.env.example` to `.env`, and update the database values. Then open:
+
+```text
+/install
 ```
 
-Install dependencies:
-
-```bash
-npm install
-```
-
-Start MySQL:
-
-```bash
-docker compose up db
-```
-
-Create the database schema and seed sample data:
-
-```bash
-npm run db:push
-npm run db:seed
-```
-
-Start the app:
-
-```bash
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-## Docker Compose Development
-
-You can also start the app and database together:
-
-```bash
-docker compose up
-```
-
-The app runs on `http://localhost:3000`, and MySQL is exposed on local port `3306`.
+The installer creates the tables and sample data.
 
 ## Deployment
 
@@ -142,12 +107,11 @@ Anesti should make it easy to leave, back up, or self-host:
 
 ## Repository Setup
 
-To work on Anesti locally, clone the repository and install dependencies:
+To work on Anesti locally, clone the repository:
 
 ```bash
 git clone https://github.com/YOUR_GITHUB_USERNAME/churchyard-ledger.git
 cd churchyard-ledger
-npm install
 ```
 
 For a first commit in a new repository:
