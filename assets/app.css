@@ -221,6 +221,28 @@ h1 {
   color: var(--foreground);
 }
 
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.table-action {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.table-action:hover {
+  background: var(--muted);
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -332,6 +354,14 @@ h1 {
   gap: 14px;
 }
 
+.record-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
 .form label {
   display: grid;
   gap: 6px;
@@ -339,11 +369,17 @@ h1 {
   font-weight: 700;
 }
 
-.form input {
+.form input,
+.form select,
+.form textarea {
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 10px 12px;
   font: inherit;
+}
+
+.form textarea {
+  resize: vertical;
 }
 
 .notice {
@@ -367,7 +403,8 @@ h1 {
 
   .hero-grid,
   .two-column,
-  .metrics {
+  .metrics,
+  .record-form {
     grid-template-columns: 1fr;
   }
 

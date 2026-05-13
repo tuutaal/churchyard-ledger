@@ -73,6 +73,71 @@ final class Repository
         }
     }
 
+    public function person(string $id): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare('select * from people where id = :id limit 1');
+            $statement->execute(['id' => $id]);
+            $person = $statement->fetch() ?: null;
+            if ($person && !empty($person['alternate_names'])) {
+                $names = json_decode((string) $person['alternate_names'], true);
+                $person['alternate_names_text'] = is_array($names) ? implode(', ', $names) : '';
+            }
+            return $person;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public function savePerson(?string $id, array $data): ?string
+    {
+        if ($this->db === null || trim((string) ($data['legal_name'] ?? '')) === '') {
+            return null;
+        }
+
+        $id ??= self::id();
+        $alternateNames = array_values(array_filter(array_map('trim', explode(',', (string) ($data['alternate_names_text'] ?? '')))));
+        $values = [
+            'id' => $id,
+            'organization_id' => $this->organizationId(),
+            'legal_name' => trim((string) $data['legal_name']),
+            'given_name' => $this->blankToNull($data['given_name'] ?? null),
+            'family_name' => $this->blankToNull($data['family_name'] ?? null),
+            'maiden_name' => $this->blankToNull($data['maiden_name'] ?? null),
+            'birth_date_text' => $this->blankToNull($data['birth_date_text'] ?? null),
+            'death_date_text' => $this->blankToNull($data['death_date_text'] ?? null),
+            'alternate_names' => $alternateNames ? json_encode($alternateNames) : null,
+            'notes' => $this->blankToNull($data['notes'] ?? null),
+            'visibility' => $this->allowed($data['visibility'] ?? '', ['private', 'public'], 'private'),
+            'confidence' => $this->allowed($data['confidence'] ?? '', ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+        ];
+
+        try {
+            if ($this->person($id)) {
+                $sql = 'update people set legal_name = :legal_name, given_name = :given_name, family_name = :family_name,
+                    maiden_name = :maiden_name, birth_date_text = :birth_date_text, death_date_text = :death_date_text,
+                    alternate_names = :alternate_names, notes = :notes, visibility = :visibility, confidence = :confidence
+                    where id = :id';
+                $this->db->prepare($sql)->execute(array_diff_key($values, ['organization_id' => true]));
+                $this->audit('update', 'Person', $id, 'Updated person record for ' . $values['legal_name']);
+            } else {
+                $sql = 'insert into people (id, organization_id, legal_name, given_name, family_name, maiden_name, birth_date_text,
+                    death_date_text, alternate_names, notes, visibility, confidence)
+                    values (:id, :organization_id, :legal_name, :given_name, :family_name, :maiden_name, :birth_date_text,
+                    :death_date_text, :alternate_names, :notes, :visibility, :confidence)';
+                $this->db->prepare($sql)->execute($values);
+                $this->audit('create', 'Person', $id, 'Created person record for ' . $values['legal_name']);
+            }
+            return $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     public function plots(): array
     {
         if ($this->db === null) {
@@ -89,6 +154,73 @@ final class Repository
             return $rows ?: SampleData::plots();
         } catch (Throwable) {
             return SampleData::plots();
+        }
+    }
+
+    public function plot(string $id): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare('select * from plots where id = :id limit 1');
+            $statement->execute(['id' => $id]);
+            return $statement->fetch() ?: null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public function sections(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query('select id, code, name from sections order by sort_order, code')->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function savePlot(?string $id, array $data): ?string
+    {
+        if ($this->db === null || trim((string) ($data['identifier'] ?? '')) === '') {
+            return null;
+        }
+
+        $id ??= self::id();
+        $values = [
+            'id' => $id,
+            'cemetery_id' => $this->cemeteryId(),
+            'section_id' => $this->blankToNull($data['section_id'] ?? null),
+            'identifier' => trim((string) $data['identifier']),
+            'row_label' => $this->blankToNull($data['row_label'] ?? null),
+            'lot' => $this->blankToNull($data['lot'] ?? null),
+            'status' => $this->allowed($data['status'] ?? '', ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification'], 'unknown'),
+            'notes' => $this->blankToNull($data['notes'] ?? null),
+            'visibility' => $this->allowed($data['visibility'] ?? '', ['private', 'public'], 'private'),
+            'confidence' => $this->allowed($data['confidence'] ?? '', ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+        ];
+
+        try {
+            if ($this->plot($id)) {
+                $sql = 'update plots set section_id = :section_id, identifier = :identifier, row_label = :row_label,
+                    lot = :lot, status = :status, notes = :notes, visibility = :visibility, confidence = :confidence
+                    where id = :id';
+                $this->db->prepare($sql)->execute(array_diff_key($values, ['cemetery_id' => true]));
+                $this->audit('update', 'Plot', $id, 'Updated plot ' . $values['identifier']);
+            } else {
+                $sql = 'insert into plots (id, cemetery_id, section_id, identifier, row_label, lot, status, notes, visibility, confidence)
+                    values (:id, :cemetery_id, :section_id, :identifier, :row_label, :lot, :status, :notes, :visibility, :confidence)';
+                $this->db->prepare($sql)->execute($values);
+                $this->audit('create', 'Plot', $id, 'Created plot ' . $values['identifier']);
+            }
+            return $id;
+        } catch (Throwable) {
+            return null;
         }
     }
 
@@ -109,5 +241,53 @@ final class Repository
             'status' => pretty($plot['confidence']),
             'tone' => $plot['confidence'] === 'conflicting' ? 'danger' : 'warning',
         ], array_slice(array_values($plots), 0, 4));
+    }
+
+    private function organizationId(): string
+    {
+        return (string) $this->db?->query('select id from organizations order by created_at limit 1')->fetchColumn();
+    }
+
+    private function cemeteryId(): string
+    {
+        return (string) $this->db?->query('select id from cemeteries order by created_at limit 1')->fetchColumn();
+    }
+
+    private function audit(string $action, string $entityType, string $entityId, string $summary): void
+    {
+        if ($this->db === null) {
+            return;
+        }
+
+        try {
+            $this->db->prepare('insert into audit_logs (id, organization_id, action, entity_type, entity_id, summary)
+                values (:id, :organization_id, :action, :entity_type, :entity_id, :summary)')->execute([
+                    'id' => self::id(),
+                    'organization_id' => $this->organizationId(),
+                    'action' => $action,
+                    'entity_type' => $entityType,
+                    'entity_id' => $entityId,
+                    'summary' => $summary,
+                ]);
+        } catch (Throwable) {
+        }
+    }
+
+    private function blankToNull(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+        return $value === '' ? null : $value;
+    }
+
+    private function allowed(mixed $value, array $allowed, string $fallback): string
+    {
+        $value = (string) $value;
+        return in_array($value, $allowed, true) ? $value : $fallback;
+    }
+
+    private static function id(): string
+    {
+        $hex = bin2hex(random_bytes(16));
+        return sprintf('%s-%s-%s-%s-%s', substr($hex, 0, 8), substr($hex, 8, 4), substr($hex, 12, 4), substr($hex, 16, 4), substr($hex, 20));
     }
 }

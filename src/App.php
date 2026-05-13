@@ -24,10 +24,37 @@ final class App
         $path = parse_url($uri, PHP_URL_PATH) ?: '/';
         $path = preg_replace('#^/index\.php/?#', '/', $path) ?? $path;
         $route = trim($path, '/') ?: 'dashboard';
+        $segments = $route === 'dashboard' ? ['dashboard'] : explode('/', $route);
 
         if ($route === 'install') {
             $this->install();
             return;
+        }
+
+        if ($segments[0] === 'people') {
+            $html = match (true) {
+                count($segments) === 1 => $this->people(),
+                ($segments[1] ?? '') === 'new' => $this->personForm(null),
+                ($segments[2] ?? '') === 'edit' => $this->personForm($segments[1]),
+                default => null,
+            };
+            if ($html !== null) {
+                $this->layout('People', 'people', $html);
+                return;
+            }
+        }
+
+        if ($segments[0] === 'plots') {
+            $html = match (true) {
+                count($segments) === 1 => $this->plots(),
+                ($segments[1] ?? '') === 'new' => $this->plotForm(null),
+                ($segments[2] ?? '') === 'edit' => $this->plotForm($segments[1]),
+                default => null,
+            };
+            if ($html !== null) {
+                $this->layout('Plots', 'plots', $html);
+                return;
+            }
         }
 
         $known = ['dashboard', 'people', 'plots', 'search', 'map', 'tutorial', 'public'];
@@ -69,7 +96,7 @@ final class App
                 <p class="eyebrow">Next best action</p>
                 <h2>Review uncertain records</h2>
                 <p class="lede">Start with records marked probable, conflicting, or unknown before publishing broader public search results.</p>
-                <a class="button secondary" href="plots">Open review queue</a>
+                <a class="button secondary" href="/plots">Open review queue</a>
             </section>
         </div>
         <div class="metrics">
@@ -114,6 +141,7 @@ final class App
             <p class="eyebrow">People</p>
             <h1>People</h1>
             <p class="lede">Record names, partial dates, notes, confidence, and public/private visibility.</p>
+            <div class="actions"><a class="button" href="/people/new">Add person</a></div>
             <?= $this->peopleTable($this->repository->people()) ?>
         </section>
         <?php
@@ -128,6 +156,7 @@ final class App
             <p class="eyebrow">Plots</p>
             <h1>Plots</h1>
             <p class="lede">Track plot identifiers, sections, status, verification confidence, and visibility.</p>
+            <div class="actions"><a class="button" href="/plots/new">Add plot</a></div>
             <?= $this->plotsTable($this->repository->plots()) ?>
         </section>
         <?php
@@ -159,13 +188,13 @@ final class App
     private function tutorial(): string
     {
         $steps = [
-            'Start on the dashboard to see totals and records needing verification.',
-            'Open Plots to review status, confidence, and public/private visibility.',
-            'Open People to review names, partial dates, and uncertain records.',
-            'Use Public Pages later to share only approved public cemetery records.',
+            'Open People and click Edit beside a sample person. Try adding a note or changing confidence to probable.',
+            'Open Plots and click Edit beside a plot. Review status, visibility, row, lot, and section.',
+            'Use needs verification, probable, conflicting, or unknown whenever a church record is incomplete.',
+            'Keep private records private until the cemetery board is ready to publish them.',
         ];
 
-        $html = '<section class="panel"><p class="eyebrow">First demo walkthrough</p><h1>Tutorial</h1><p class="lede">A short guide for a church secretary, pastor, trustee, or volunteer opening Anesti for the first time.</p><div class="metrics">';
+        $html = '<section class="panel"><p class="eyebrow">First working walkthrough</p><h1>Tutorial</h1><p class="lede">Use this demo like a small cemetery office notebook: check uncertain records first, make a careful edit, then confirm what should be public.</p><div class="actions"><a class="button" href="/people">Edit people</a><a class="button secondary" href="/plots">Edit plots</a></div><div class="metrics">';
         foreach ($steps as $index => $step) {
             $html .= '<div class="card"><p class="card-label">Step ' . ($index + 1) . '</p><p class="card-detail">' . e($step) . '</p></div>';
         }
@@ -174,7 +203,7 @@ final class App
 
     private function publicPage(): string
     {
-        return '<section class="panel"><p class="eyebrow">Public cemetery page</p><h1>Public Records</h1><p class="lede">Public pages should show only records marked public by the organization.</p><a class="button" href="search">Search records</a></section>';
+        return '<section class="panel"><p class="eyebrow">Public cemetery page</p><h1>Public Records</h1><p class="lede">Public pages should show only records marked public by the organization.</p><a class="button" href="/search">Search records</a></section>';
     }
 
     private function install(): void
@@ -251,20 +280,130 @@ final class App
         return '<div class="card"><p class="card-label">' . e($label) . '</p><p class="card-value">' . e($value) . '</p><p class="card-detail">' . e($detail) . '</p></div>';
     }
 
+    private function personForm(?string $id): string
+    {
+        $person = $id === null ? [] : $this->repository->person($id);
+        if ($id !== null && !$person) {
+            http_response_code(404);
+            return '<section class="panel"><h1>Person not found</h1><p class="lede">That person record could not be found.</p></section>';
+        }
+
+        $message = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $savedId = $this->repository->savePerson($id, $_POST);
+            if ($savedId !== null) {
+                header('Location: /people/' . rawurlencode($savedId) . '/edit?saved=1');
+                return '';
+            }
+            $message = 'Could not save the person record. Check that the database is connected.';
+            $person = $_POST;
+        } elseif (($_GET['saved'] ?? '') === '1') {
+            $message = 'Person record saved.';
+        }
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">People</p>
+            <h1><?= $id === null ? 'Add person' : 'Edit person' ?></h1>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <form class="form record-form" method="post">
+                <label>Legal name <input name="legal_name" value="<?= e($person['legal_name'] ?? '') ?>" required></label>
+                <label>Given name <input name="given_name" value="<?= e($person['given_name'] ?? '') ?>"></label>
+                <label>Family name <input name="family_name" value="<?= e($person['family_name'] ?? '') ?>"></label>
+                <label>Maiden name <input name="maiden_name" value="<?= e($person['maiden_name'] ?? '') ?>"></label>
+                <label>Birth date text <input name="birth_date_text" value="<?= e($person['birth_date_text'] ?? '') ?>" placeholder="1881 or about 1881"></label>
+                <label>Death date text <input name="death_date_text" value="<?= e($person['death_date_text'] ?? '') ?>" placeholder="June 1946 or unknown"></label>
+                <label>Alternate names <input name="alternate_names_text" value="<?= e($person['alternate_names_text'] ?? '') ?>" placeholder="Separate names with commas"></label>
+                <?= $this->select('confidence', 'Confidence', $person['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
+                <?= $this->select('visibility', 'Visibility', $person['visibility'] ?? 'private', ['private', 'public']) ?>
+                <label class="full">Notes <textarea name="notes" rows="5"><?= e($person['notes'] ?? '') ?></textarea></label>
+                <div class="actions full">
+                    <button class="button" type="submit">Save person</button>
+                    <a class="button secondary" href="/people">Back to people</a>
+                </div>
+            </form>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function plotForm(?string $id): string
+    {
+        $plot = $id === null ? [] : $this->repository->plot($id);
+        if ($id !== null && !$plot) {
+            http_response_code(404);
+            return '<section class="panel"><h1>Plot not found</h1><p class="lede">That plot record could not be found.</p></section>';
+        }
+
+        $message = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $savedId = $this->repository->savePlot($id, $_POST);
+            if ($savedId !== null) {
+                header('Location: /plots/' . rawurlencode($savedId) . '/edit?saved=1');
+                return '';
+            }
+            $message = 'Could not save the plot record. Check that the database is connected.';
+            $plot = $_POST;
+        } elseif (($_GET['saved'] ?? '') === '1') {
+            $message = 'Plot record saved.';
+        }
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Plots</p>
+            <h1><?= $id === null ? 'Add plot' : 'Edit plot' ?></h1>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <form class="form record-form" method="post">
+                <label>Plot identifier <input name="identifier" value="<?= e($plot['identifier'] ?? '') ?>" required></label>
+                <label>Section
+                    <select name="section_id">
+                        <option value="">No section</option>
+                        <?php foreach ($this->repository->sections() as $section): ?>
+                            <option value="<?= e($section['id']) ?>"<?= ($plot['section_id'] ?? '') === $section['id'] ? ' selected' : '' ?>><?= e($section['code'] . ' - ' . $section['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>Row <input name="row_label" value="<?= e($plot['row_label'] ?? '') ?>"></label>
+                <label>Lot <input name="lot" value="<?= e($plot['lot'] ?? '') ?>"></label>
+                <?= $this->select('status', 'Status', $plot['status'] ?? 'unknown', ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification']) ?>
+                <?= $this->select('confidence', 'Confidence', $plot['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
+                <?= $this->select('visibility', 'Visibility', $plot['visibility'] ?? 'private', ['private', 'public']) ?>
+                <label class="full">Notes <textarea name="notes" rows="5"><?= e($plot['notes'] ?? '') ?></textarea></label>
+                <div class="actions full">
+                    <button class="button" type="submit">Save plot</button>
+                    <a class="button secondary" href="/plots">Back to plots</a>
+                </div>
+            </form>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function select(string $name, string $label, string $selected, array $options): string
+    {
+        $html = '<label>' . e($label) . '<select name="' . e($name) . '">';
+        foreach ($options as $option) {
+            $html .= '<option value="' . e($option) . '"' . ($selected === $option ? ' selected' : '') . '>' . e(pretty($option)) . '</option>';
+        }
+        return $html . '</select></label>';
+    }
+
     private function peopleTable(array $people): string
     {
-        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Name</th><th>Born</th><th>Died</th><th>Confidence</th><th>Visibility</th></tr></thead><tbody>';
+        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Name</th><th>Born</th><th>Died</th><th>Confidence</th><th>Visibility</th><th></th></tr></thead><tbody>';
         foreach ($people as $person) {
-            $html .= '<tr><td><strong>' . e($person['legal_name']) . '</strong></td><td>' . e($person['birth_date_text'] ?: 'Unknown') . '</td><td>' . e($person['death_date_text'] ?: 'Unknown') . '</td><td>' . e(pretty($person['confidence'])) . '</td><td>' . e(pretty($person['visibility'])) . '</td></tr>';
+            $html .= '<tr><td><strong>' . e($person['legal_name']) . '</strong></td><td>' . e($person['birth_date_text'] ?: 'Unknown') . '</td><td>' . e($person['death_date_text'] ?: 'Unknown') . '</td><td>' . e(pretty($person['confidence'])) . '</td><td>' . e(pretty($person['visibility'])) . '</td><td><a class="table-action" href="/people/' . e($person['id']) . '/edit">Edit</a></td></tr>';
         }
         return $html . '</tbody></table>';
     }
 
     private function plotsTable(array $plots): string
     {
-        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Plot</th><th>Section</th><th>Row</th><th>Lot</th><th>Status</th><th>Confidence</th></tr></thead><tbody>';
+        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Plot</th><th>Section</th><th>Row</th><th>Lot</th><th>Status</th><th>Confidence</th><th></th></tr></thead><tbody>';
         foreach ($plots as $plot) {
-            $html .= '<tr><td><strong>' . e($plot['identifier']) . '</strong></td><td>' . e($plot['section_code'] ?? 'None') . '</td><td>' . e($plot['row_label'] ?? 'Unknown') . '</td><td>' . e($plot['lot'] ?? 'Unknown') . '</td><td>' . e(pretty($plot['status'])) . '</td><td>' . e(pretty($plot['confidence'])) . '</td></tr>';
+            $html .= '<tr><td><strong>' . e($plot['identifier']) . '</strong></td><td>' . e($plot['section_code'] ?? 'None') . '</td><td>' . e($plot['row_label'] ?? 'Unknown') . '</td><td>' . e($plot['lot'] ?? 'Unknown') . '</td><td>' . e(pretty($plot['status'])) . '</td><td>' . e(pretty($plot['confidence'])) . '</td><td><a class="table-action" href="/plots/' . e($plot['id']) . '/edit">Edit</a></td></tr>';
         }
         return $html . '</tbody></table>';
     }
