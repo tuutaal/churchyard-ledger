@@ -49,6 +49,7 @@ http://localhost:8080
 - Upload a grave photo on an interment.
 - Check the public page at `/public`.
 - Download CSV files from `/exports`.
+- Import a small people, plots, or interments CSV from `/imports`.
 
 ## Database Access
 

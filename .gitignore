@@ -1,13 +1,6 @@
-node_modules
-.next
-out
-dist
-coverage
 .env
-.env.local
-.env.*.local
 *.log
-prisma/dev.db
 .docker-config/
+local-archives/
 uploads/grave-photos/*
 !uploads/grave-photos/.gitkeep

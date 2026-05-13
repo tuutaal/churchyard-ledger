@@ -27,6 +27,7 @@ The name points to the Christian hope confessed in the resurrection of the body 
 - Exportable data with no vendor lock-in
 - Public cemetery search and map pages
 - GIS-friendly structure, starting simple
+- CSV import and export for core records
 
 ## Initial Stack
 
@@ -35,6 +36,7 @@ The name points to the Christian hope confessed in the resurrection of the body 
 - PDO
 - cPanel-compatible shared hosting
 - No Composer dependency for the first release
+- No Node.js or npm build step
 - Leaflet or MapLibre for maps later
 
 ## Architecture Notes
@@ -123,6 +125,7 @@ These pages should show only records that the organization has marked public.
 Anesti should make it easy to leave, back up, or self-host:
 
 - CSV export for core tables
+- CSV import for people, plots, and interments
 - JSON export for full-fidelity data
 - Media and document export bundles
 - MySQL backup documentation

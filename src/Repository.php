@@ -518,6 +518,95 @@ final class Repository
         }
     }
 
+    public function importCsv(string $type, string $path): array
+    {
+        $result = [
+            'message' => '',
+            'processed' => 0,
+            'imported' => 0,
+            'skipped' => 0,
+            'errors' => [],
+        ];
+
+        if ($this->db === null) {
+            $result['message'] = 'Connect the database before importing CSV records.';
+            return $result;
+        }
+
+        if (!in_array($type, ['people', 'plots', 'interments'], true)) {
+            $result['message'] = 'Choose people, plots, or interments before importing.';
+            return $result;
+        }
+
+        if ($path === '' || !is_readable($path)) {
+            $result['message'] = 'The uploaded CSV file could not be read.';
+            return $result;
+        }
+
+        $handle = fopen($path, 'r');
+        if ($handle === false) {
+            $result['message'] = 'The uploaded CSV file could not be opened.';
+            return $result;
+        }
+
+        $headers = fgetcsv($handle);
+        if (!is_array($headers)) {
+            fclose($handle);
+            $result['message'] = 'The CSV file needs a header row.';
+            return $result;
+        }
+
+        $headers = array_map(fn (string $header) => $this->normalizeCsvHeader($header), $headers);
+        if (!$this->hasRequiredImportHeaders($type, $headers)) {
+            fclose($handle);
+            $result['message'] = $this->requiredImportHeaderMessage($type);
+            return $result;
+        }
+
+        while (($values = fgetcsv($handle)) !== false) {
+            if ($this->csvRowIsBlank($values)) {
+                continue;
+            }
+
+            $result['processed']++;
+            if ($result['processed'] > 1000) {
+                $result['skipped']++;
+                $this->addImportError($result, 'Only the first 1,000 data rows were imported. Split larger files into smaller batches.');
+                break;
+            }
+
+            $row = $this->combineCsvRow($headers, $values);
+            $error = match ($type) {
+                'people' => $this->importPersonRow($row),
+                'plots' => $this->importPlotRow($row),
+                'interments' => $this->importIntermentRow($row),
+                default => 'Unsupported import type.',
+            };
+
+            if ($error === null) {
+                $result['imported']++;
+            } else {
+                $result['skipped']++;
+                $this->addImportError($result, 'Row ' . ($result['processed'] + 1) . ': ' . $error);
+            }
+        }
+
+        fclose($handle);
+
+        $result['message'] = sprintf(
+            'Import complete: %d imported, %d skipped, %d processed.',
+            $result['imported'],
+            $result['skipped'],
+            $result['processed']
+        );
+
+        if ($result['imported'] > 0) {
+            $this->audit('import', pretty($type), '', 'Imported ' . $result['imported'] . ' ' . pretty($type) . ' rows from CSV');
+        }
+
+        return $result;
+    }
+
     public function verificationItems(): array
     {
         $plots = array_filter($this->plots(), fn (array $plot) => $plot['confidence'] !== 'confirmed' || $plot['status'] === 'needs_verification');
@@ -564,6 +653,189 @@ final class Repository
                     'summary' => $summary,
                 ]);
         } catch (Throwable) {
+        }
+    }
+
+    private function importPersonRow(array $row): ?string
+    {
+        if (trim((string) ($row['legal_name'] ?? '')) === '') {
+            return 'legal_name is required.';
+        }
+
+        if (empty($row['alternate_names_text']) && !empty($row['alternate_names'])) {
+            $alternateNames = json_decode((string) $row['alternate_names'], true);
+            $row['alternate_names_text'] = is_array($alternateNames)
+                ? implode(', ', array_filter(array_map('strval', $alternateNames)))
+                : (string) $row['alternate_names'];
+        }
+
+        $id = $this->blankToNull($row['id'] ?? null);
+        return $this->savePerson($id, $row) === null ? 'Could not save this person.' : null;
+    }
+
+    private function importPlotRow(array $row): ?string
+    {
+        if (trim((string) ($row['identifier'] ?? '')) === '') {
+            return 'identifier is required.';
+        }
+
+        $sectionCode = $this->blankToNull($row['section_code'] ?? null);
+        if ($sectionCode !== null) {
+            $sectionId = $this->sectionIdByCode($sectionCode);
+            if ($sectionId === null) {
+                return 'section_code "' . $sectionCode . '" was not found.';
+            }
+            $row['section_id'] = $sectionId;
+        }
+
+        $id = $this->blankToNull($row['id'] ?? null) ?? $this->plotIdByIdentifier((string) $row['identifier']);
+        return $this->savePlot($id, $row) === null ? 'Could not save this plot.' : null;
+    }
+
+    private function importIntermentRow(array $row): ?string
+    {
+        $personId = $this->blankToNull($row['person_id'] ?? null);
+        if ($personId === null && $this->blankToNull($row['person_name'] ?? null) !== null) {
+            $personId = $this->personIdByName((string) $row['person_name']);
+        }
+
+        if ($personId === null || $this->person($personId) === null) {
+            return 'person_id or person_name must match an existing person.';
+        }
+
+        $plotId = $this->blankToNull($row['plot_id'] ?? null);
+        if ($plotId === null && $this->blankToNull($row['plot_identifier'] ?? null) !== null) {
+            $plotId = $this->plotIdByIdentifier((string) $row['plot_identifier']);
+        }
+
+        if ($plotId === null || $this->plot($plotId) === null) {
+            return 'plot_id or plot_identifier must match an existing plot.';
+        }
+
+        $row['person_id'] = $personId;
+        $row['plot_id'] = $plotId;
+        $id = $this->blankToNull($row['id'] ?? null);
+
+        return $this->saveInterment($id, $row) === null ? 'Could not save this interment.' : null;
+    }
+
+    private function sectionIdByCode(string $code): ?string
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare('select id from sections where code = :code order by sort_order, code limit 1');
+            $statement->execute(['code' => trim($code)]);
+            $id = $statement->fetchColumn();
+            return $id === false ? null : (string) $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function personIdByName(string $name): ?string
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare('select id from people where legal_name = :name order by created_at limit 1');
+            $statement->execute(['name' => trim($name)]);
+            $id = $statement->fetchColumn();
+            return $id === false ? null : (string) $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function plotIdByIdentifier(string $identifier): ?string
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare('select id from plots where cemetery_id = :cemetery_id and identifier = :identifier limit 1');
+            $statement->execute(['cemetery_id' => $this->cemeteryId(), 'identifier' => trim($identifier)]);
+            $id = $statement->fetchColumn();
+            return $id === false ? null : (string) $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function hasRequiredImportHeaders(string $type, array $headers): bool
+    {
+        if ($type === 'people') {
+            return in_array('legal_name', $headers, true);
+        }
+
+        if ($type === 'plots') {
+            return in_array('identifier', $headers, true);
+        }
+
+        return (in_array('person_id', $headers, true) || in_array('person_name', $headers, true))
+            && (in_array('plot_id', $headers, true) || in_array('plot_identifier', $headers, true));
+    }
+
+    private function requiredImportHeaderMessage(string $type): string
+    {
+        return match ($type) {
+            'people' => 'People imports need a legal_name header.',
+            'plots' => 'Plot imports need an identifier header.',
+            'interments' => 'Interment imports need person_id or person_name, plus plot_id or plot_identifier.',
+            default => 'The CSV file is missing required headers.',
+        };
+    }
+
+    private function normalizeCsvHeader(string $header): string
+    {
+        $header = preg_replace('/^\xEF\xBB\xBF/', '', $header) ?? $header;
+        $header = strtolower(trim($header));
+        $header = str_replace([' ', '-'], '_', $header);
+
+        return match ($header) {
+            'name' => 'legal_name',
+            'alternate_names_text' => 'alternate_names',
+            'plot' => 'plot_identifier',
+            'person' => 'person_name',
+            'row' => 'row_label',
+            default => $header,
+        };
+    }
+
+    private function combineCsvRow(array $headers, array $values): array
+    {
+        $row = [];
+        foreach ($headers as $index => $header) {
+            if ($header === '') {
+                continue;
+            }
+
+            $row[$header] = trim((string) ($values[$index] ?? ''));
+        }
+
+        return $row;
+    }
+
+    private function csvRowIsBlank(array $values): bool
+    {
+        foreach ($values as $value) {
+            if (trim((string) $value) !== '') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function addImportError(array &$result, string $error): void
+    {
+        if (count($result['errors']) < 20) {
+            $result['errors'][] = $error;
         }
     }
 

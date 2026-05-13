@@ -16,12 +16,14 @@ This project follows a simple changelog format while the app is early in develop
 - Added local development documentation in `LOCAL_DEVELOPMENT.md`.
 - Added public interment search on `/public`.
 - Added internal admin/editor search on `/search`.
+- Added CSV imports for people, plots, and interments on `/imports`.
 
 ### Changed
 
 - Public search now shows only public interment records.
 - Public search no longer exposes casket/cremains disposition type.
 - Public search no longer lists or searches public plots separately.
+- Removed old Next.js, Node.js, TypeScript, and Drizzle files from the active repository tree after archiving them locally.
 
 ## 2026-05-12
 

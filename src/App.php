@@ -86,7 +86,7 @@ final class App
             return;
         }
 
-        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'exports'];
+        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'imports', 'exports'];
         if (!in_array($route, $known, true)) {
             http_response_code(404);
             $this->layout('Not Found', 'not-found', '<div class="panel"><h1>Page not found</h1></div>');
@@ -101,6 +101,7 @@ final class App
             'map' => $this->map(),
             'tutorial' => $this->tutorial(),
             'public' => $this->publicPage(),
+            'imports' => $this->imports(),
             'exports' => $this->exports(),
             default => $this->dashboard(),
         };
@@ -334,6 +335,83 @@ final class App
                         <p class="card-label"><?= e($export['label']) ?></p>
                         <p class="card-detail"><?= e($export['detail']) ?></p>
                         <div class="actions"><a class="button" href="<?= e($export['href']) ?>">Download</a></div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function imports(): string
+    {
+        $result = null;
+        $message = '';
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $type = (string) ($_POST['import_type'] ?? '');
+            $file = $_FILES['csv_file'] ?? null;
+
+            if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+                $message = 'Choose a CSV file to import.';
+            } elseif (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+                $message = 'The CSV upload did not complete. Try again with a smaller file.';
+            } elseif ((int) ($file['size'] ?? 0) > 2 * 1024 * 1024) {
+                $message = 'CSV imports are limited to 2 MB for now.';
+            } else {
+                $path = (string) ($file['tmp_name'] ?? '');
+                $result = $this->repository->importCsv($type, $path);
+                $message = $result['message'];
+            }
+        }
+
+        $templates = [
+            'people' => 'legal_name,given_name,family_name,maiden_name,birth_date_text,death_date_text,alternate_names,visibility,confidence,notes',
+            'plots' => 'identifier,section_code,row_label,lot,status,visibility,confidence,notes',
+            'interments' => 'person_name,plot_identifier,disposition_type,interment_date_text,burial_permit_number,plot_position,marker_transcription,visibility,confidence,notes,photo_url',
+        ];
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Import</p>
+            <h1>Import CSV Records</h1>
+            <p class="lede">Bring in people, plots, or interments from a simple CSV file. Start with a small file and review the imported records before publishing them.</p>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <?php if ($result !== null): ?>
+                <div class="metrics import-summary">
+                    <?= $this->metric('Imported', (int) $result['imported'], 'Rows saved to Anesti') ?>
+                    <?= $this->metric('Skipped', (int) $result['skipped'], 'Rows left unchanged because required data was missing or invalid') ?>
+                    <?= $this->metric('Processed', (int) $result['processed'], 'CSV data rows read') ?>
+                </div>
+                <?php if ($result['errors']): ?>
+                    <div class="card import-errors">
+                        <h2>Rows To Review</h2>
+                        <ul>
+                            <?php foreach ($result['errors'] as $error): ?>
+                                <li><?= e($error) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
+            <?php endif; ?>
+            <form class="form record-form" method="post" enctype="multipart/form-data">
+                <?= $this->select('import_type', 'Record type', (string) ($_POST['import_type'] ?? 'people'), ['people', 'plots', 'interments']) ?>
+                <label>CSV file <input name="csv_file" type="file" accept=".csv,text/csv" required></label>
+                <div class="actions full">
+                    <button class="button" type="submit">Import CSV</button>
+                    <a class="button secondary" href="/exports">Download exports</a>
+                </div>
+            </form>
+        </section>
+        <section class="card public-section">
+            <h2>CSV Headers</h2>
+            <p class="lede">Use these headers, or download an export and edit it. Extra columns are ignored.</p>
+            <div class="template-list">
+                <?php foreach ($templates as $label => $headers): ?>
+                    <div>
+                        <p class="card-label"><?= e(pretty($label)) ?></p>
+                        <code><?= e($headers) ?></code>
                     </div>
                 <?php endforeach; ?>
             </div>
@@ -673,7 +751,7 @@ final class App
 
     private function layout(string $title, string $route, string $content): void
     {
-        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
+        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'imports' => 'Imports', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
         ?>
         <!doctype html>
         <html lang="en">
