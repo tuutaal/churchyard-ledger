@@ -179,6 +179,11 @@ final class App
 
     private function install(): void
     {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST' && $this->isInstalled()) {
+            header('Location: /');
+            return;
+        }
+
         $message = '';
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $values = [
@@ -195,7 +200,8 @@ final class App
                 try {
                     Schema::migrate($db);
                     Seeder::seed($db);
-                    $message = 'Install complete. You can open the dashboard now.';
+                    header('Location: /?installed=1');
+                    return;
                 } catch (Throwable $error) {
                     $message = 'Database connected, but setup failed: ' . $error->getMessage();
                 }
@@ -212,17 +218,32 @@ final class App
             <p class="lede">Enter your cPanel MySQL details. This creates the tables and sample data.</p>
             <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
             <form class="form" method="post">
-                <label>Database host <input name="db_host" value="localhost" required></label>
-                <label>Database port <input name="db_port" value="3306" required></label>
-                <label>Database name <input name="db_name" required></label>
-                <label>Database user <input name="db_user" required></label>
+                <label>Database host <input name="db_host" value="<?= e($this->env->all()['ANESTI_DB_HOST'] ?? 'localhost') ?>" required></label>
+                <label>Database port <input name="db_port" value="<?= e($this->env->all()['ANESTI_DB_PORT'] ?? '3306') ?>" required></label>
+                <label>Database name <input name="db_name" value="<?= e($this->env->all()['ANESTI_DB_NAME'] ?? '') ?>" required></label>
+                <label>Database user <input name="db_user" value="<?= e($this->env->all()['ANESTI_DB_USER'] ?? '') ?>" required></label>
                 <label>Database password <input name="db_password" type="password"></label>
-                <label>App URL <input name="app_url" placeholder="https://records.example.org"></label>
+                <label>App URL <input name="app_url" value="<?= e($this->env->all()['ANESTI_APP_URL'] ?? '') ?>" placeholder="https://records.example.org"></label>
                 <button class="button" type="submit">Install sample data</button>
             </form>
         </section>
         <?php
         $this->layout('Install', 'install', (string) ob_get_clean());
+    }
+
+    private function isInstalled(): bool
+    {
+        $db = (new Database($this->env->all()))->connect();
+        if ($db === null) {
+            return false;
+        }
+
+        try {
+            $db->query('select 1 from cemeteries limit 1');
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     private function metric(string $label, int $value, string $detail): string
@@ -258,7 +279,7 @@ final class App
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title><?= e($title) ?> - Anesti</title>
-            <link rel="stylesheet" href="assets/app.css">
+            <link rel="stylesheet" href="/assets/app.css">
         </head>
         <body>
         <div class="app">
@@ -266,7 +287,7 @@ final class App
                 <div class="brand"><div class="brand-mark">A</div><div><p class="brand-title">Anesti</p><p class="brand-subtitle">Cemetery records and maps</p></div></div>
                 <nav class="nav">
                     <?php foreach ($nav as $path => $label): ?>
-                        <a href="<?= e($path === 'dashboard' ? '/' : $path) ?>"<?= active($path, $route) ?>><?= e($label) ?></a>
+                        <a href="<?= e($path === 'dashboard' ? '/' : '/' . $path) ?>"<?= active($path, $route) ?>><?= e($label) ?></a>
                     <?php endforeach; ?>
                 </nav>
                 <div class="support-note">Free and open-source software for small churches, rural cemeteries, and volunteer cemetery boards.</div>
