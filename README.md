@@ -128,6 +128,10 @@ Anesti should make it easy to leave, back up, or self-host:
 - MySQL backup documentation
 - No vendor lock-in
 
+## Changelog
+
+Project changes are tracked in [CHANGELOG.md](./CHANGELOG.md). Update it whenever adding user-facing features, schema changes, deployment changes, security fixes, or notable bug fixes.
+
 ## Repository Setup
 
 To work on Anesti locally, clone the repository:
