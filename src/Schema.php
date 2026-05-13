@@ -6,6 +6,7 @@ declare(strict_types=1);
 namespace Anesti;
 
 use PDO;
+use Throwable;
 
 final class Schema
 {
@@ -14,6 +15,8 @@ final class Schema
         foreach (self::statements() as $statement) {
             $db->exec($statement);
         }
+
+        self::addColumnIfMissing($db, 'interments', 'disposition_type', "enum('unknown','casket','cremains','other') not null default 'unknown' after person_id");
     }
 
     private static function statements(): array
@@ -118,6 +121,7 @@ final class Schema
                 cemetery_id varchar(36) not null,
                 plot_id varchar(36) not null,
                 person_id varchar(36) not null,
+                disposition_type enum('unknown','casket','cremains','other') not null default 'unknown',
                 interment_date_text varchar(120),
                 interment_date date,
                 burial_permit_number varchar(120),
@@ -222,5 +226,20 @@ final class Schema
                 created_at timestamp not null default current_timestamp
             )",
         ];
+    }
+
+    private static function addColumnIfMissing(PDO $db, string $table, string $column, string $definition): void
+    {
+        try {
+            $statement = $db->prepare(
+                'select count(*) from information_schema.columns
+                 where table_schema = database() and table_name = :table and column_name = :column'
+            );
+            $statement->execute(['table' => $table, 'column' => $column]);
+            if ((int) $statement->fetchColumn() === 0) {
+                $db->exec(sprintf('alter table %s add column %s %s', $table, $column, $definition));
+            }
+        } catch (Throwable) {
+        }
     }
 }

@@ -16,6 +16,12 @@ final class App
     {
         $this->env = new Env($root);
         $db = (new Database($this->env->all()))->connect();
+        if ($db !== null) {
+            try {
+                Schema::migrate($db);
+            } catch (Throwable) {
+            }
+        }
         $this->repository = new Repository($db);
     }
 
@@ -57,7 +63,20 @@ final class App
             }
         }
 
-        $known = ['dashboard', 'people', 'plots', 'search', 'map', 'tutorial', 'public'];
+        if ($segments[0] === 'interments') {
+            $html = match (true) {
+                count($segments) === 1 => $this->interments(),
+                ($segments[1] ?? '') === 'new' => $this->intermentForm(null),
+                ($segments[2] ?? '') === 'edit' => $this->intermentForm($segments[1]),
+                default => null,
+            };
+            if ($html !== null) {
+                $this->layout('Interments', 'interments', $html);
+                return;
+            }
+        }
+
+        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public'];
         if (!in_array($route, $known, true)) {
             http_response_code(404);
             $this->layout('Not Found', 'not-found', '<div class="panel"><h1>Page not found</h1></div>');
@@ -67,6 +86,7 @@ final class App
         $html = match ($route) {
             'people' => $this->people(),
             'plots' => $this->plots(),
+            'interments' => $this->interments(),
             'search' => $this->search(),
             'map' => $this->map(),
             'tutorial' => $this->tutorial(),
@@ -163,6 +183,21 @@ final class App
         return (string) ob_get_clean();
     }
 
+    private function interments(): string
+    {
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Interments</p>
+            <h1>Interments</h1>
+            <p class="lede">Connect people to plots. A plot can have one interment, no interments, or multiple interments for double burials and cremains.</p>
+            <div class="actions"><a class="button" href="/interments/new">Add interment</a></div>
+            <?= $this->intermentsTable($this->repository->interments()) ?>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
     private function search(): string
     {
         ob_start();
@@ -171,6 +206,7 @@ final class App
             <p class="eyebrow">Search</p>
             <h1>Search</h1>
             <p class="lede">This first shared-hosting build lists records now. Interactive filtering comes next.</p>
+            <div class="actions"><a class="button secondary" href="/interments">View interments</a></div>
             <div class="two-column">
                 <div><?= $this->peopleTable($this->repository->people()) ?></div>
                 <div><?= $this->plotsTable($this->repository->plots()) ?></div>
@@ -188,13 +224,13 @@ final class App
     private function tutorial(): string
     {
         $steps = [
-            'Open People and click Edit beside a sample person. Try adding a note or changing confidence to probable.',
-            'Open Plots and click Edit beside a plot. Review status, visibility, row, lot, and section.',
-            'Use needs verification, probable, conflicting, or unknown whenever a church record is incomplete.',
-            'Keep private records private until the cemetery board is ready to publish them.',
+            'Create or edit a person record first. Use partial dates when the marker or old register is incomplete.',
+            'Create or edit the plot. Mark its status and keep uncertainty visible with the confidence field.',
+            'Add an interment to connect the person to the plot. Add another interment to the same plot for double burials or cremains.',
+            'Attach a grave photo URL to the interment when you have one, then decide whether the record is public or private.',
         ];
 
-        $html = '<section class="panel"><p class="eyebrow">First working walkthrough</p><h1>Tutorial</h1><p class="lede">Use this demo like a small cemetery office notebook: check uncertain records first, make a careful edit, then confirm what should be public.</p><div class="actions"><a class="button" href="/people">Edit people</a><a class="button secondary" href="/plots">Edit plots</a></div><div class="metrics">';
+        $html = '<section class="panel"><p class="eyebrow">First working walkthrough</p><h1>Tutorial</h1><p class="lede">Use Anesti like a careful cemetery office notebook: people, plots, and interments are separate so one plot can hold multiple burials without losing accuracy.</p><div class="actions"><a class="button" href="/people">Edit people</a><a class="button secondary" href="/plots">Edit plots</a><a class="button secondary" href="/interments">Connect interments</a></div><div class="metrics">';
         foreach ($steps as $index => $step) {
             $html .= '<div class="card"><p class="card-label">Step ' . ($index + 1) . '</p><p class="card-detail">' . e($step) . '</p></div>';
         }
@@ -381,6 +417,80 @@ final class App
         return (string) ob_get_clean();
     }
 
+    private function intermentForm(?string $id): string
+    {
+        $interment = $id === null ? [] : $this->repository->interment($id);
+        if ($id !== null && !$interment) {
+            http_response_code(404);
+            return '<section class="panel"><h1>Interment not found</h1><p class="lede">That interment record could not be found.</p></section>';
+        }
+
+        $message = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $savedId = $this->repository->saveInterment($id, $_POST);
+            if ($savedId !== null) {
+                header('Location: /interments/' . rawurlencode($savedId) . '/edit?saved=1');
+                return '';
+            }
+            $message = 'Could not save the interment. Choose a person and plot, then try again.';
+            $interment = $_POST;
+        } elseif (($_GET['saved'] ?? '') === '1') {
+            $message = 'Interment saved.';
+        }
+
+        $photos = $id === null ? [] : $this->repository->mediaForInterment($id);
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Interments</p>
+            <h1><?= $id === null ? 'Add interment' : 'Edit interment' ?></h1>
+            <p class="lede">This is the link between a person and a plot. Add a second interment using the same plot for a double burial or cremains.</p>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <form class="form record-form" method="post">
+                <label>Person
+                    <select name="person_id" required>
+                        <option value="">Choose a person</option>
+                        <?php foreach ($this->repository->personOptions() as $person): ?>
+                            <option value="<?= e($person['id']) ?>"<?= ($interment['person_id'] ?? '') === $person['id'] ? ' selected' : '' ?>><?= e($person['legal_name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>Plot
+                    <select name="plot_id" required>
+                        <option value="">Choose a plot</option>
+                        <?php foreach ($this->repository->plotOptions() as $plot): ?>
+                            <option value="<?= e($plot['id']) ?>"<?= ($interment['plot_id'] ?? '') === $plot['id'] ? ' selected' : '' ?>><?= e($plot['identifier']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <?= $this->select('disposition_type', 'Casket or cremains', $interment['disposition_type'] ?? 'unknown', ['unknown', 'casket', 'cremains', 'other']) ?>
+                <label>Interment date text <input name="interment_date_text" value="<?= e($interment['interment_date_text'] ?? '') ?>" placeholder="June 1946 or unknown"></label>
+                <label>Burial permit number <input name="burial_permit_number" value="<?= e($interment['burial_permit_number'] ?? '') ?>"></label>
+                <label>Position in plot <input name="plot_position" value="<?= e($interment['plot_position'] ?? '') ?>" placeholder="North side, spouse side, urn area"></label>
+                <?= $this->select('confidence', 'Confidence', $interment['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
+                <?= $this->select('visibility', 'Visibility', $interment['visibility'] ?? 'private', ['private', 'public']) ?>
+                <label class="full">Marker transcription <textarea name="marker_transcription" rows="4"><?= e($interment['marker_transcription'] ?? '') ?></textarea></label>
+                <label class="full">Notes <textarea name="notes" rows="4"><?= e($interment['notes'] ?? '') ?></textarea></label>
+                <label class="full">Add grave photo URL <input name="photo_url" placeholder="https://example.org/grave-photo.jpg"></label>
+                <?php if ($photos): ?>
+                    <div class="full photo-list">
+                        <p class="card-label">Attached photos</p>
+                        <?php foreach ($photos as $photo): ?>
+                            <a href="<?= e($photo['url']) ?>" target="_blank" rel="noreferrer"><?= e($photo['title']) ?></a>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+                <div class="actions full">
+                    <button class="button" type="submit">Save interment</button>
+                    <a class="button secondary" href="/interments">Back to interments</a>
+                </div>
+            </form>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
     private function select(string $name, string $label, string $selected, array $options): string
     {
         $html = '<label>' . e($label) . '<select name="' . e($name) . '">';
@@ -408,9 +518,18 @@ final class App
         return $html . '</tbody></table>';
     }
 
+    private function intermentsTable(array $interments): string
+    {
+        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Person</th><th>Plot</th><th>Type</th><th>Date</th><th>Confidence</th><th>Visibility</th><th></th></tr></thead><tbody>';
+        foreach ($interments as $interment) {
+            $html .= '<tr><td><strong>' . e($interment['person_name'] ?? 'Unknown') . '</strong></td><td>' . e($interment['plot_identifier'] ?? 'Unknown') . '</td><td>' . e(pretty($interment['disposition_type'] ?? 'unknown')) . '</td><td>' . e($interment['interment_date_text'] ?: 'Unknown') . '</td><td>' . e(pretty($interment['confidence'])) . '</td><td>' . e(pretty($interment['visibility'])) . '</td><td><a class="table-action" href="/interments/' . e($interment['id']) . '/edit">Edit</a></td></tr>';
+        }
+        return $html . '</tbody></table>';
+    }
+
     private function layout(string $title, string $route, string $content): void
     {
-        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'search' => 'Search', 'map' => 'Map', 'tutorial' => 'Tutorial', 'public' => 'Public Page', 'install' => 'Install'];
+        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'tutorial' => 'Tutorial', 'public' => 'Public Page', 'install' => 'Install'];
         ?>
         <!doctype html>
         <html lang="en">

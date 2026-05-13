@@ -382,6 +382,21 @@ h1 {
   resize: vertical;
 }
 
+.photo-list {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.photo-list a {
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .notice {
   border: 1px solid var(--border);
   border-radius: 8px;

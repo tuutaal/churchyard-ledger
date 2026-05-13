@@ -224,6 +224,132 @@ final class Repository
         }
     }
 
+    public function interments(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query(
+                'select interments.id, interments.disposition_type, interments.interment_date_text, interments.visibility,
+                    interments.confidence, people.legal_name as person_name, plots.identifier as plot_identifier
+                 from interments
+                 left join people on people.id = interments.person_id
+                 left join plots on plots.id = interments.plot_id
+                 order by plots.identifier, people.legal_name'
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function interment(string $id): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare('select * from interments where id = :id limit 1');
+            $statement->execute(['id' => $id]);
+            return $statement->fetch() ?: null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public function personOptions(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query('select id, legal_name from people order by legal_name')->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function plotOptions(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query('select id, identifier from plots order by identifier')->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function saveInterment(?string $id, array $data): ?string
+    {
+        if (
+            $this->db === null
+            || trim((string) ($data['person_id'] ?? '')) === ''
+            || trim((string) ($data['plot_id'] ?? '')) === ''
+        ) {
+            return null;
+        }
+
+        $id ??= self::id();
+        $values = [
+            'id' => $id,
+            'cemetery_id' => $this->cemeteryId(),
+            'plot_id' => trim((string) $data['plot_id']),
+            'person_id' => trim((string) $data['person_id']),
+            'disposition_type' => $this->allowed($data['disposition_type'] ?? '', ['unknown', 'casket', 'cremains', 'other'], 'unknown'),
+            'interment_date_text' => $this->blankToNull($data['interment_date_text'] ?? null),
+            'burial_permit_number' => $this->blankToNull($data['burial_permit_number'] ?? null),
+            'marker_transcription' => $this->blankToNull($data['marker_transcription'] ?? null),
+            'plot_position' => $this->blankToNull($data['plot_position'] ?? null),
+            'notes' => $this->blankToNull($data['notes'] ?? null),
+            'visibility' => $this->allowed($data['visibility'] ?? '', ['private', 'public'], 'private'),
+            'confidence' => $this->allowed($data['confidence'] ?? '', ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+        ];
+
+        try {
+            if ($this->interment($id)) {
+                $sql = 'update interments set plot_id = :plot_id, person_id = :person_id, disposition_type = :disposition_type,
+                    interment_date_text = :interment_date_text, burial_permit_number = :burial_permit_number,
+                    marker_transcription = :marker_transcription, plot_position = :plot_position, notes = :notes,
+                    visibility = :visibility, confidence = :confidence where id = :id';
+                $this->db->prepare($sql)->execute(array_diff_key($values, ['cemetery_id' => true]));
+                $this->audit('update', 'Interment', $id, 'Updated interment record');
+            } else {
+                $sql = 'insert into interments (id, cemetery_id, plot_id, person_id, disposition_type, interment_date_text,
+                    burial_permit_number, marker_transcription, plot_position, notes, visibility, confidence)
+                    values (:id, :cemetery_id, :plot_id, :person_id, :disposition_type, :interment_date_text,
+                    :burial_permit_number, :marker_transcription, :plot_position, :notes, :visibility, :confidence)';
+                $this->db->prepare($sql)->execute($values);
+                $this->audit('create', 'Interment', $id, 'Created interment record');
+            }
+
+            $this->attachPhoto($id, $values, $data);
+            return $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public function mediaForInterment(string $intermentId): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            $statement = $this->db->prepare('select title, url from media where interment_id = :interment_id and media_type = :media_type order by created_at desc');
+            $statement->execute(['interment_id' => $intermentId, 'media_type' => 'image']);
+            return $statement->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
     public function verificationItems(): array
     {
         $plots = array_filter($this->plots(), fn (array $plot) => $plot['confidence'] !== 'confirmed' || $plot['status'] === 'needs_verification');
@@ -269,6 +395,45 @@ final class Repository
                     'entity_id' => $entityId,
                     'summary' => $summary,
                 ]);
+        } catch (Throwable) {
+        }
+    }
+
+    private function attachPhoto(string $intermentId, array $interment, array $data): void
+    {
+        if ($this->db === null) {
+            return;
+        }
+
+        $url = $this->blankToNull($data['photo_url'] ?? null);
+        if ($url === null) {
+            return;
+        }
+
+        try {
+            $existing = $this->db->prepare('select count(*) from media where interment_id = :interment_id and url = :url');
+            $existing->execute(['interment_id' => $intermentId, 'url' => $url]);
+            if ((int) $existing->fetchColumn() > 0) {
+                return;
+            }
+
+            $this->db->prepare('insert into media (id, organization_id, cemetery_id, plot_id, person_id, interment_id, title,
+                media_type, url, visibility, confidence)
+                values (:id, :organization_id, :cemetery_id, :plot_id, :person_id, :interment_id, :title,
+                :media_type, :url, :visibility, :confidence)')->execute([
+                    'id' => self::id(),
+                    'organization_id' => $this->organizationId(),
+                    'cemetery_id' => $interment['cemetery_id'],
+                    'plot_id' => $interment['plot_id'],
+                    'person_id' => $interment['person_id'],
+                    'interment_id' => $intermentId,
+                    'title' => 'Grave photo',
+                    'media_type' => 'image',
+                    'url' => $url,
+                    'visibility' => $interment['visibility'],
+                    'confidence' => $interment['confidence'],
+                ]);
+            $this->audit('create', 'Media', $intermentId, 'Attached grave photo URL');
         } catch (Throwable) {
         }
     }
