@@ -59,17 +59,41 @@ final class Repository
         }
     }
 
-    public function people(): array
+    public function people(string $query = ''): array
     {
         if ($this->db === null) {
             return SampleData::people();
         }
 
         try {
-            $rows = $this->db->query('select id, legal_name, birth_date_text, death_date_text, visibility, confidence from people order by legal_name')->fetchAll();
-            return $rows ?: SampleData::people();
+            $sql = 'select id, legal_name, birth_date_text, death_date_text, visibility, confidence from people';
+            $params = [];
+            if ($query !== '') {
+                $sql .= ' where legal_name like :query_legal_name
+                    or given_name like :query_given_name
+                    or family_name like :query_family_name
+                    or maiden_name like :query_maiden_name
+                    or birth_date_text like :query_birth_date
+                    or death_date_text like :query_death_date
+                    or notes like :query_notes';
+                $like = '%' . $this->escapeLike($query) . '%';
+                $params = [
+                    'query_legal_name' => $like,
+                    'query_given_name' => $like,
+                    'query_family_name' => $like,
+                    'query_maiden_name' => $like,
+                    'query_birth_date' => $like,
+                    'query_death_date' => $like,
+                    'query_notes' => $like,
+                ];
+            }
+            $sql .= ' order by legal_name';
+            $statement = $this->db->prepare($sql);
+            $statement->execute($params);
+            $rows = $statement->fetchAll();
+            return $rows ?: ($query === '' ? SampleData::people() : []);
         } catch (Throwable) {
-            return SampleData::people();
+            return $query === '' ? SampleData::people() : [];
         }
     }
 
@@ -138,22 +162,45 @@ final class Repository
         }
     }
 
-    public function plots(): array
+    public function plots(string $query = ''): array
     {
         if ($this->db === null) {
             return SampleData::plots();
         }
 
         try {
-            $rows = $this->db->query(
+            $where = '';
+            $params = [];
+            if ($query !== '') {
+                $where = ' where plots.identifier like :query_identifier
+                    or sections.code like :query_section_code
+                    or sections.name like :query_section_name
+                    or plots.row_label like :query_row
+                    or plots.lot like :query_lot
+                    or plots.status like :query_status
+                    or plots.notes like :query_notes';
+                $like = '%' . $this->escapeLike($query) . '%';
+                $params = [
+                    'query_identifier' => $like,
+                    'query_section_code' => $like,
+                    'query_section_name' => $like,
+                    'query_row' => $like,
+                    'query_lot' => $like,
+                    'query_status' => $like,
+                    'query_notes' => $like,
+                ];
+            }
+            $statement = $this->db->prepare(
                 'select plots.id, plots.identifier, sections.code as section_code, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence
                  from plots
-                 left join sections on sections.id = plots.section_id
+                 left join sections on sections.id = plots.section_id' . $where . '
                  order by plots.identifier'
-            )->fetchAll();
-            return $rows ?: SampleData::plots();
+            );
+            $statement->execute($params);
+            $rows = $statement->fetchAll();
+            return $rows ?: ($query === '' ? SampleData::plots() : []);
         } catch (Throwable) {
-            return SampleData::plots();
+            return $query === '' ? SampleData::plots() : [];
         }
     }
 
@@ -224,21 +271,45 @@ final class Repository
         }
     }
 
-    public function interments(): array
+    public function interments(string $query = ''): array
     {
         if ($this->db === null) {
             return [];
         }
 
         try {
-            return $this->db->query(
+            $where = '';
+            $params = [];
+            if ($query !== '') {
+                $where = ' where people.legal_name like :query_name
+                    or plots.identifier like :query_plot
+                    or interments.disposition_type like :query_disposition
+                    or interments.interment_date_text like :query_interment_date
+                    or interments.burial_permit_number like :query_permit
+                    or interments.marker_transcription like :query_marker
+                    or interments.notes like :query_notes';
+                $like = '%' . $this->escapeLike($query) . '%';
+                $params = [
+                    'query_name' => $like,
+                    'query_plot' => $like,
+                    'query_disposition' => $like,
+                    'query_interment_date' => $like,
+                    'query_permit' => $like,
+                    'query_marker' => $like,
+                    'query_notes' => $like,
+                ];
+            }
+
+            $statement = $this->db->prepare(
                 'select interments.id, interments.disposition_type, interments.interment_date_text, interments.visibility,
                     interments.confidence, people.legal_name as person_name, plots.identifier as plot_identifier
                  from interments
                  left join people on people.id = interments.person_id
-                 left join plots on plots.id = interments.plot_id
+                 left join plots on plots.id = interments.plot_id' . $where . '
                  order by plots.identifier, people.legal_name'
-            )->fetchAll();
+            );
+            $statement->execute($params);
+            return $statement->fetchAll();
         } catch (Throwable) {
             return [];
         }
@@ -351,15 +422,44 @@ final class Repository
         }
     }
 
-    public function publicInterments(): array
+    public function publicInterments(string $query = ''): array
     {
         if ($this->db === null) {
             return [];
         }
 
         try {
-            return $this->db->query(
-                "select interments.id, interments.disposition_type, people.legal_name as person_name,
+            $where = "interments.visibility = 'public'
+                    and people.visibility = 'public'
+                    and plots.visibility = 'public'";
+            $params = [];
+
+            if ($query !== '') {
+                $where .= " and (
+                    people.legal_name like :query_legal_name
+                    or people.given_name like :query_given_name
+                    or people.family_name like :query_family_name
+                    or people.maiden_name like :query_maiden_name
+                    or people.birth_date_text like :query_birth_date
+                    or people.death_date_text like :query_death_date
+                    or interments.interment_date_text like :query_interment_date
+                    or interments.marker_transcription like :query_marker
+                )";
+                $like = '%' . $this->escapeLike($query) . '%';
+                $params = [
+                    'query_legal_name' => $like,
+                    'query_given_name' => $like,
+                    'query_family_name' => $like,
+                    'query_maiden_name' => $like,
+                    'query_birth_date' => $like,
+                    'query_death_date' => $like,
+                    'query_interment_date' => $like,
+                    'query_marker' => $like,
+                ];
+            }
+
+            $statement = $this->db->prepare(
+                "select interments.id, people.legal_name as person_name,
                     people.birth_date_text, people.death_date_text, plots.identifier as plot_identifier,
                     (
                         select media.url from media
@@ -369,30 +469,11 @@ final class Repository
                  from interments
                  join people on people.id = interments.person_id
                  join plots on plots.id = interments.plot_id
-                 where interments.visibility = 'public'
-                    and people.visibility = 'public'
-                    and plots.visibility = 'public'
+                 where {$where}
                  order by people.family_name, people.legal_name, plots.identifier"
-            )->fetchAll();
-        } catch (Throwable) {
-            return [];
-        }
-    }
-
-    public function publicPlots(): array
-    {
-        if ($this->db === null) {
-            return [];
-        }
-
-        try {
-            return $this->db->query(
-                "select plots.identifier, sections.code as section_code, plots.status, plots.confidence
-                 from plots
-                 left join sections on sections.id = plots.section_id
-                 where plots.visibility = 'public'
-                 order by plots.identifier"
-            )->fetchAll();
+            );
+            $statement->execute($params);
+            return $statement->fetchAll();
         } catch (Throwable) {
             return [];
         }
@@ -597,6 +678,11 @@ final class Repository
     {
         $value = (string) $value;
         return in_array($value, $allowed, true) ? $value : $fallback;
+    }
+
+    private function escapeLike(string $value): string
+    {
+        return strtr($value, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']);
     }
 
     private static function id(): string

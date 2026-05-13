@@ -8,5 +8,6 @@ coverage
 .env.*.local
 *.log
 prisma/dev.db
+.docker-config/
 uploads/grave-photos/*
 !uploads/grave-photos/.gitkeep

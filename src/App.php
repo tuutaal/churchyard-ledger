@@ -211,17 +211,46 @@ final class App
 
     private function search(): string
     {
+        $query = trim((string) ($_GET['q'] ?? ''));
+        if (strlen($query) > 120) {
+            $query = substr($query, 0, 120);
+        }
+
+        $people = $this->repository->people($query);
+        $plots = $this->repository->plots($query);
+        $interments = $this->repository->interments($query);
+        $resultCount = count($people) + count($plots) + count($interments);
+
         ob_start();
         ?>
         <section class="panel">
-            <p class="eyebrow">Search</p>
-            <h1>Search</h1>
-            <p class="lede">This first shared-hosting build lists records now. Interactive filtering comes next.</p>
+            <p class="eyebrow">Admin and editor search</p>
+            <h1>Internal Search</h1>
+            <p class="lede">Search all records, including private records and working notes. This is for administrators and editors, not the public cemetery page.</p>
+            <form class="search-form" method="get" action="/search">
+                <label for="admin-search">Search records</label>
+                <div class="search-row">
+                    <input id="admin-search" name="q" value="<?= e($query) ?>" placeholder="Name, plot, section, status, year, or marker text">
+                    <button class="button" type="submit">Search</button>
+                    <?php if ($query !== ''): ?><a class="button secondary" href="/search">Clear</a><?php endif; ?>
+                </div>
+            </form>
+            <?php if ($query !== ''): ?>
+                <p class="search-summary"><?= e($resultCount) ?> internal <?= $resultCount === 1 ? 'result' : 'results' ?> for "<?= e($query) ?>"</p>
+            <?php endif; ?>
             <div class="actions"><a class="button secondary" href="/interments">View interments</a></div>
-            <div class="two-column">
-                <div><?= $this->peopleTable($this->repository->people()) ?></div>
-                <div><?= $this->plotsTable($this->repository->plots()) ?></div>
-            </div>
+        </section>
+        <section class="card public-section">
+            <h2>People</h2>
+            <?= $this->peopleTable($people) ?>
+        </section>
+        <section class="card public-section">
+            <h2>Plots</h2>
+            <?= $this->plotsTable($plots) ?>
+        </section>
+        <section class="card public-section">
+            <h2>Interments</h2>
+            <?= $this->intermentsTable($interments) ?>
         </section>
         <?php
         return (string) ob_get_clean();
@@ -251,20 +280,34 @@ final class App
     private function publicPage(): string
     {
         $cemetery = $this->repository->cemetery();
+        $query = trim((string) ($_GET['q'] ?? ''));
+        if (strlen($query) > 120) {
+            $query = substr($query, 0, 120);
+        }
+        $publicInterments = $this->repository->publicInterments($query);
+        $resultCount = count($publicInterments);
+
         ob_start();
         ?>
         <section class="panel public-hero">
             <p class="eyebrow">Public cemetery page</p>
             <h1><?= e($cemetery['name']) ?></h1>
-            <p class="lede">This page only shows records marked public. Private notes, private plots, and private people are kept out of this view.</p>
+            <p class="lede">Search public interment records. Private notes, disposition type, private plots, and private people are kept out of this view.</p>
+            <form class="search-form" method="get" action="/public">
+                <label for="public-search">Search public interments</label>
+                <div class="search-row">
+                    <input id="public-search" name="q" value="<?= e($query) ?>" placeholder="Name, date, or marker text">
+                    <button class="button" type="submit">Search</button>
+                    <?php if ($query !== ''): ?><a class="button secondary" href="/public">Clear</a><?php endif; ?>
+                </div>
+            </form>
+            <?php if ($query !== ''): ?>
+                <p class="search-summary"><?= e($resultCount) ?> public interment <?= $resultCount === 1 ? 'result' : 'results' ?> for "<?= e($query) ?>"</p>
+            <?php endif; ?>
         </section>
         <section class="card public-section">
             <h2>Public Interments</h2>
-            <?= $this->publicIntermentsTable($this->repository->publicInterments()) ?>
-        </section>
-        <section class="card public-section">
-            <h2>Public Plots</h2>
-            <?= $this->publicPlotsTable($this->repository->publicPlots()) ?>
+            <?= $this->publicIntermentsTable($publicInterments, $query) ?>
         </section>
         <?php
         return (string) ob_get_clean();
@@ -613,30 +656,17 @@ final class App
         return $html . '</tbody></table>';
     }
 
-    private function publicIntermentsTable(array $interments): string
+    private function publicIntermentsTable(array $interments, string $query = ''): string
     {
         if (!$interments) {
-            return '<p class="lede">No public interments are available yet.</p>';
+            return '<p class="lede">' . ($query === '' ? 'No public interments are available yet.' : 'No public interments match this search.') . '</p>';
         }
 
-        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Name</th><th>Plot</th><th>Type</th><th>Dates</th><th>Photo</th></tr></thead><tbody>';
+        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Name</th><th>Plot</th><th>Dates</th><th>Photo</th></tr></thead><tbody>';
         foreach ($interments as $interment) {
             $dates = trim(($interment['birth_date_text'] ?? '') . ' - ' . ($interment['death_date_text'] ?? ''), ' -');
             $photo = !empty($interment['photo_url']) ? '<a class="table-action" href="' . e($interment['photo_url']) . '" target="_blank" rel="noreferrer">Photo</a>' : '';
-            $html .= '<tr><td><strong>' . e($interment['person_name']) . '</strong></td><td>' . e($interment['plot_identifier']) . '</td><td>' . e(pretty($interment['disposition_type'] ?? 'unknown')) . '</td><td>' . e($dates ?: 'Unknown') . '</td><td>' . $photo . '</td></tr>';
-        }
-        return $html . '</tbody></table>';
-    }
-
-    private function publicPlotsTable(array $plots): string
-    {
-        if (!$plots) {
-            return '<p class="lede">No public plots are available yet.</p>';
-        }
-
-        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Plot</th><th>Section</th><th>Status</th><th>Confidence</th></tr></thead><tbody>';
-        foreach ($plots as $plot) {
-            $html .= '<tr><td><strong>' . e($plot['identifier']) . '</strong></td><td>' . e($plot['section_code'] ?? 'None') . '</td><td>' . e(pretty($plot['status'])) . '</td><td>' . e(pretty($plot['confidence'])) . '</td></tr>';
+            $html .= '<tr><td><strong>' . e($interment['person_name']) . '</strong></td><td>' . e($interment['plot_identifier']) . '</td><td>' . e($dates ?: 'Unknown') . '</td><td>' . $photo . '</td></tr>';
         }
         return $html . '</tbody></table>';
     }
