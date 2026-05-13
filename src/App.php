@@ -76,7 +76,17 @@ final class App
             }
         }
 
-        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public'];
+        if ($segments[0] === 'exports') {
+            if (count($segments) === 1) {
+                $this->layout('Exports', 'exports', $this->exports());
+                return;
+            }
+
+            $this->downloadCsv($segments[1]);
+            return;
+        }
+
+        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'exports'];
         if (!in_array($route, $known, true)) {
             http_response_code(404);
             $this->layout('Not Found', 'not-found', '<div class="panel"><h1>Page not found</h1></div>');
@@ -91,6 +101,7 @@ final class App
             'map' => $this->map(),
             'tutorial' => $this->tutorial(),
             'public' => $this->publicPage(),
+            'exports' => $this->exports(),
             default => $this->dashboard(),
         };
 
@@ -239,7 +250,78 @@ final class App
 
     private function publicPage(): string
     {
-        return '<section class="panel"><p class="eyebrow">Public cemetery page</p><h1>Public Records</h1><p class="lede">Public pages should show only records marked public by the organization.</p><a class="button" href="/search">Search records</a></section>';
+        $cemetery = $this->repository->cemetery();
+        ob_start();
+        ?>
+        <section class="panel public-hero">
+            <p class="eyebrow">Public cemetery page</p>
+            <h1><?= e($cemetery['name']) ?></h1>
+            <p class="lede">This page only shows records marked public. Private notes, private plots, and private people are kept out of this view.</p>
+        </section>
+        <section class="card public-section">
+            <h2>Public Interments</h2>
+            <?= $this->publicIntermentsTable($this->repository->publicInterments()) ?>
+        </section>
+        <section class="card public-section">
+            <h2>Public Plots</h2>
+            <?= $this->publicPlotsTable($this->repository->publicPlots()) ?>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function exports(): string
+    {
+        $exports = [
+            ['label' => 'People CSV', 'href' => '/exports/people.csv', 'detail' => 'Names, partial dates, visibility, confidence, and notes.'],
+            ['label' => 'Plots CSV', 'href' => '/exports/plots.csv', 'detail' => 'Plot identifiers, sections, status, visibility, confidence, and notes.'],
+            ['label' => 'Interments CSV', 'href' => '/exports/interments.csv', 'detail' => 'The person-to-plot connections, including casket/cremains, marker text, and dates.'],
+            ['label' => 'Media CSV', 'href' => '/exports/media.csv', 'detail' => 'Photo and media URLs with their linked person, plot, and interment IDs.'],
+        ];
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Export and backup</p>
+            <h1>Exports</h1>
+            <p class="lede">Download plain CSV files so your cemetery records are portable and not locked into Anesti.</p>
+            <div class="metrics export-grid">
+                <?php foreach ($exports as $export): ?>
+                    <div class="card">
+                        <p class="card-label"><?= e($export['label']) ?></p>
+                        <p class="card-detail"><?= e($export['detail']) ?></p>
+                        <div class="actions"><a class="button" href="<?= e($export['href']) ?>">Download</a></div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function downloadCsv(string $file): void
+    {
+        $type = str_ends_with($file, '.csv') ? substr($file, 0, -4) : $file;
+        $export = $this->repository->export($type);
+        if ($export === null) {
+            http_response_code(404);
+            echo 'Export not found';
+            return;
+        }
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="anesti-' . $type . '-' . date('Y-m-d') . '.csv"');
+
+        $output = fopen('php://output', 'w');
+        if ($output === false) {
+            return;
+        }
+
+        fputcsv($output, $export['headers']);
+        foreach ($export['rows'] as $row) {
+            fputcsv($output, array_map(fn (string $header) => $row[$header] ?? '', $export['headers']));
+        }
+        fclose($output);
     }
 
     private function install(): void
@@ -427,7 +509,7 @@ final class App
 
         $message = '';
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $savedId = $this->repository->saveInterment($id, $_POST);
+            $savedId = $this->repository->saveInterment($id, $_POST, $_FILES, $this->root);
             if ($savedId !== null) {
                 header('Location: /interments/' . rawurlencode($savedId) . '/edit?saved=1');
                 return '';
@@ -447,7 +529,7 @@ final class App
             <h1><?= $id === null ? 'Add interment' : 'Edit interment' ?></h1>
             <p class="lede">This is the link between a person and a plot. Add a second interment using the same plot for a double burial or cremains.</p>
             <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
-            <form class="form record-form" method="post">
+            <form class="form record-form" method="post" enctype="multipart/form-data">
                 <label>Person
                     <select name="person_id" required>
                         <option value="">Choose a person</option>
@@ -473,11 +555,15 @@ final class App
                 <label class="full">Marker transcription <textarea name="marker_transcription" rows="4"><?= e($interment['marker_transcription'] ?? '') ?></textarea></label>
                 <label class="full">Notes <textarea name="notes" rows="4"><?= e($interment['notes'] ?? '') ?></textarea></label>
                 <label class="full">Add grave photo URL <input name="photo_url" placeholder="https://example.org/grave-photo.jpg"></label>
+                <label class="full">Upload grave photo <input name="photo_upload" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
                 <?php if ($photos): ?>
                     <div class="full photo-list">
                         <p class="card-label">Attached photos</p>
                         <?php foreach ($photos as $photo): ?>
                             <a href="<?= e($photo['url']) ?>" target="_blank" rel="noreferrer"><?= e($photo['title']) ?></a>
+                            <?php if (str_starts_with((string) $photo['url'], '/uploads/')): ?>
+                                <img src="<?= e($photo['url']) ?>" alt="<?= e($photo['title']) ?>">
+                            <?php endif; ?>
                         <?php endforeach; ?>
                     </div>
                 <?php endif; ?>
@@ -527,9 +613,37 @@ final class App
         return $html . '</tbody></table>';
     }
 
+    private function publicIntermentsTable(array $interments): string
+    {
+        if (!$interments) {
+            return '<p class="lede">No public interments are available yet.</p>';
+        }
+
+        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Name</th><th>Plot</th><th>Type</th><th>Dates</th><th>Photo</th></tr></thead><tbody>';
+        foreach ($interments as $interment) {
+            $dates = trim(($interment['birth_date_text'] ?? '') . ' - ' . ($interment['death_date_text'] ?? ''), ' -');
+            $photo = !empty($interment['photo_url']) ? '<a class="table-action" href="' . e($interment['photo_url']) . '" target="_blank" rel="noreferrer">Photo</a>' : '';
+            $html .= '<tr><td><strong>' . e($interment['person_name']) . '</strong></td><td>' . e($interment['plot_identifier']) . '</td><td>' . e(pretty($interment['disposition_type'] ?? 'unknown')) . '</td><td>' . e($dates ?: 'Unknown') . '</td><td>' . $photo . '</td></tr>';
+        }
+        return $html . '</tbody></table>';
+    }
+
+    private function publicPlotsTable(array $plots): string
+    {
+        if (!$plots) {
+            return '<p class="lede">No public plots are available yet.</p>';
+        }
+
+        $html = '<table class="table" style="margin-top:14px"><thead><tr><th>Plot</th><th>Section</th><th>Status</th><th>Confidence</th></tr></thead><tbody>';
+        foreach ($plots as $plot) {
+            $html .= '<tr><td><strong>' . e($plot['identifier']) . '</strong></td><td>' . e($plot['section_code'] ?? 'None') . '</td><td>' . e(pretty($plot['status'])) . '</td><td>' . e(pretty($plot['confidence'])) . '</td></tr>';
+        }
+        return $html . '</tbody></table>';
+    }
+
     private function layout(string $title, string $route, string $content): void
     {
-        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'tutorial' => 'Tutorial', 'public' => 'Public Page', 'install' => 'Install'];
+        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
         ?>
         <!doctype html>
         <html lang="en">

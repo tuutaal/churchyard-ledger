@@ -285,7 +285,7 @@ final class Repository
         }
     }
 
-    public function saveInterment(?string $id, array $data): ?string
+    public function saveInterment(?string $id, array $data, array $files = [], string $root = ''): ?string
     {
         if (
             $this->db === null
@@ -329,6 +329,7 @@ final class Repository
             }
 
             $this->attachPhoto($id, $values, $data);
+            $this->attachUploadedPhoto($id, $values, $files, $root);
             return $id;
         } catch (Throwable) {
             return null;
@@ -347,6 +348,92 @@ final class Repository
             return $statement->fetchAll();
         } catch (Throwable) {
             return [];
+        }
+    }
+
+    public function publicInterments(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query(
+                "select interments.id, interments.disposition_type, people.legal_name as person_name,
+                    people.birth_date_text, people.death_date_text, plots.identifier as plot_identifier,
+                    (
+                        select media.url from media
+                        where media.interment_id = interments.id and media.visibility = 'public'
+                        order by media.created_at desc limit 1
+                    ) as photo_url
+                 from interments
+                 join people on people.id = interments.person_id
+                 join plots on plots.id = interments.plot_id
+                 where interments.visibility = 'public'
+                    and people.visibility = 'public'
+                    and plots.visibility = 'public'
+                 order by people.family_name, people.legal_name, plots.identifier"
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function publicPlots(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query(
+                "select plots.identifier, sections.code as section_code, plots.status, plots.confidence
+                 from plots
+                 left join sections on sections.id = plots.section_id
+                 where plots.visibility = 'public'
+                 order by plots.identifier"
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function export(string $type): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $exports = [
+            'people' => [
+                'headers' => ['id', 'legal_name', 'given_name', 'family_name', 'maiden_name', 'alternate_names', 'birth_date_text', 'death_date_text', 'visibility', 'confidence', 'notes'],
+                'sql' => 'select id, legal_name, given_name, family_name, maiden_name, alternate_names, birth_date_text, death_date_text, visibility, confidence, notes from people order by legal_name',
+            ],
+            'plots' => [
+                'headers' => ['id', 'identifier', 'section_code', 'row_label', 'lot', 'status', 'visibility', 'confidence', 'notes', 'geometry'],
+                'sql' => 'select plots.id, plots.identifier, sections.code as section_code, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence, plots.notes, plots.geometry from plots left join sections on sections.id = plots.section_id order by plots.identifier',
+            ],
+            'interments' => [
+                'headers' => ['id', 'person_name', 'plot_identifier', 'disposition_type', 'interment_date_text', 'burial_permit_number', 'plot_position', 'marker_transcription', 'visibility', 'confidence', 'notes'],
+                'sql' => 'select interments.id, people.legal_name as person_name, plots.identifier as plot_identifier, interments.disposition_type, interments.interment_date_text, interments.burial_permit_number, interments.plot_position, interments.marker_transcription, interments.visibility, interments.confidence, interments.notes from interments left join people on people.id = interments.person_id left join plots on plots.id = interments.plot_id order by plots.identifier, people.legal_name',
+            ],
+            'media' => [
+                'headers' => ['id', 'title', 'media_type', 'url', 'storage_key', 'cemetery_id', 'plot_id', 'person_id', 'interment_id', 'owner_id', 'visibility', 'confidence'],
+                'sql' => 'select id, title, media_type, url, storage_key, cemetery_id, plot_id, person_id, interment_id, owner_id, visibility, confidence from media order by created_at desc',
+            ],
+        ];
+
+        if (!isset($exports[$type])) {
+            return null;
+        }
+
+        try {
+            return [
+                'headers' => $exports[$type]['headers'],
+                'rows' => $this->db->query($exports[$type]['sql'])->fetchAll(),
+            ];
+        } catch (Throwable) {
+            return ['headers' => $exports[$type]['headers'], 'rows' => []];
         }
     }
 
@@ -434,6 +521,68 @@ final class Repository
                     'confidence' => $interment['confidence'],
                 ]);
             $this->audit('create', 'Media', $intermentId, 'Attached grave photo URL');
+        } catch (Throwable) {
+        }
+    }
+
+    private function attachUploadedPhoto(string $intermentId, array $interment, array $files, string $root): void
+    {
+        if ($this->db === null || $root === '' || empty($files['photo_upload']) || !is_array($files['photo_upload'])) {
+            return;
+        }
+
+        $file = $files['photo_upload'];
+        if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            return;
+        }
+
+        if (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK || (int) ($file['size'] ?? 0) > 8 * 1024 * 1024) {
+            return;
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return;
+        }
+
+        $extension = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+        $extensions = ['jpg' => 'jpg', 'jpeg' => 'jpg', 'png' => 'png', 'gif' => 'gif', 'webp' => 'webp'];
+        if (!isset($extensions[$extension]) || @getimagesize($tmpName) === false) {
+            return;
+        }
+
+        $directory = rtrim($root, '/\\') . '/uploads/grave-photos';
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            return;
+        }
+
+        $fileName = self::id() . '.' . $extensions[$extension];
+        $target = $directory . '/' . $fileName;
+        if (!move_uploaded_file($tmpName, $target)) {
+            return;
+        }
+
+        $url = '/uploads/grave-photos/' . $fileName;
+
+        try {
+            $this->db->prepare('insert into media (id, organization_id, cemetery_id, plot_id, person_id, interment_id, title,
+                media_type, storage_key, url, visibility, confidence)
+                values (:id, :organization_id, :cemetery_id, :plot_id, :person_id, :interment_id, :title,
+                :media_type, :storage_key, :url, :visibility, :confidence)')->execute([
+                    'id' => self::id(),
+                    'organization_id' => $this->organizationId(),
+                    'cemetery_id' => $interment['cemetery_id'],
+                    'plot_id' => $interment['plot_id'],
+                    'person_id' => $interment['person_id'],
+                    'interment_id' => $intermentId,
+                    'title' => 'Uploaded grave photo',
+                    'media_type' => 'image',
+                    'storage_key' => 'uploads/grave-photos/' . $fileName,
+                    'url' => $url,
+                    'visibility' => $interment['visibility'],
+                    'confidence' => $interment['confidence'],
+                ]);
+            $this->audit('create', 'Media', $intermentId, 'Uploaded grave photo');
         } catch (Throwable) {
         }
     }
