@@ -2,36 +2,39 @@ services:
   db:
     image: mysql:8.4
     environment:
-      MYSQL_DATABASE: churchyard_ledger
-      MYSQL_USER: churchyard
-      MYSQL_PASSWORD: churchyard
-      MYSQL_ROOT_PASSWORD: churchyard-root
+      MYSQL_DATABASE: anesti
+      MYSQL_USER: anesti
+      MYSQL_PASSWORD: anesti
+      MYSQL_ROOT_PASSWORD: anesti-root
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u churchyard --password=churchyard"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u anesti --password=anesti"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   app:
-    image: node:22-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev"
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
     environment:
-      DATABASE_URL: mysql://churchyard:churchyard@db:3306/churchyard_ledger
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      ANESTI_DB_HOST: db
+      ANESTI_DB_PORT: 3306
+      ANESTI_DB_NAME: anesti
+      ANESTI_DB_USER: anesti
+      ANESTI_DB_PASSWORD: anesti
+      ANESTI_APP_URL: http://localhost:8080
+      ANESTI_ENV: development
     ports:
-      - "3000:3000"
+      - "8080:80"
     volumes:
-      - .:/app
-      - node-modules:/app/node_modules
+      - .:/var/www/html
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   mysql-data:
-  node-modules:

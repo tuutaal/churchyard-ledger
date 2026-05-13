@@ -13,20 +13,25 @@ final class Env
 
     public function all(): array
     {
+        $values = [];
         $path = $this->root . '/.env';
-        if (!is_file($path)) {
-            return [];
+        if (is_file($path)) {
+            foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+                $line = trim($line);
+                if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
+                    continue;
+                }
+
+                [$key, $value] = explode('=', $line, 2);
+                $values[trim($key)] = trim(trim($value), "\"'");
+            }
         }
 
-        $values = [];
-        foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
-            $line = trim($line);
-            if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
-                continue;
+        foreach (self::keys() as $key) {
+            $value = getenv($key);
+            if ($value !== false) {
+                $values[$key] = $value;
             }
-
-            [$key, $value] = explode('=', $line, 2);
-            $values[trim($key)] = trim(trim($value), "\"'");
         }
 
         return $values;
@@ -45,5 +50,19 @@ final class Env
         ];
 
         return file_put_contents($this->root . '/.env', implode(PHP_EOL, $lines) . PHP_EOL) !== false;
+    }
+
+    private static function keys(): array
+    {
+        return [
+            'DATABASE_URL',
+            'ANESTI_DB_HOST',
+            'ANESTI_DB_PORT',
+            'ANESTI_DB_NAME',
+            'ANESTI_DB_USER',
+            'ANESTI_DB_PASSWORD',
+            'ANESTI_APP_URL',
+            'ANESTI_ENV',
+        ];
     }
 }

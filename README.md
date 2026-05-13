@@ -55,9 +55,32 @@ The initial schema includes:
 
 ## Local Development
 
-Use any local PHP/MySQL environment such as XAMPP, MAMP, Laragon, or your editor's PHP server.
+The easiest local setup is Docker Desktop. It runs the same basic services Anesti needs on shared hosting:
 
-Create a MySQL database, copy `.env.example` to `.env`, and update the database values. Then open:
+- PHP with Apache
+- MySQL
+
+From the project folder:
+
+```bash
+docker compose up --build
+```
+
+Then open:
+
+```text
+http://localhost:8080/install
+```
+
+Use the prefilled installer values and install the sample data. After that, open:
+
+```text
+http://localhost:8080
+```
+
+The local MySQL database is exposed on port `3307` if you want to inspect it with a desktop database tool.
+
+If you prefer XAMPP, MAMP, Laragon, or another local PHP/MySQL setup, create a MySQL database, copy `.env.example` to `.env`, update the database values, and open:
 
 ```text
 /install
