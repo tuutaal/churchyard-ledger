@@ -217,7 +217,7 @@ final class Repository
 
         try {
             return $this->db->query(
-                'select plots.id, plots.identifier, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence,
+                'select plots.id, plots.identifier, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence, plots.geometry,
                     sections.code as section_code, sections.name as section_name, sections.sort_order as section_sort_order,
                     count(interments.id) as interment_count,
                     group_concat(people.legal_name order by people.legal_name separator ", ") as interment_names
@@ -225,7 +225,7 @@ final class Repository
                  left join sections on sections.id = plots.section_id
                  left join interments on interments.plot_id = plots.id
                  left join people on people.id = interments.person_id
-                 group by plots.id, plots.identifier, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence,
+                 group by plots.id, plots.identifier, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence, plots.geometry,
                     sections.code, sections.name, sections.sort_order
                  order by coalesce(sections.sort_order, 9999), sections.code, plots.identifier'
             )->fetchAll();

@@ -261,77 +261,338 @@ final class App
     private function map(): string
     {
         $plots = $this->repository->mapPlots();
-        $sections = [];
         $statusCounts = [];
         foreach ($plots as $plot) {
-            $sectionLabel = trim((string) ($plot['section_code'] ?? '')) !== ''
-                ? 'Section ' . $plot['section_code']
-                : 'Unsectioned';
-            $sections[$sectionLabel][] = $plot;
             $status = (string) ($plot['status'] ?? 'unknown');
             $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
         }
 
         $statuses = ['available', 'reserved', 'occupied', 'sold', 'needs_verification', 'unusable', 'unknown'];
+        $mapData = $this->mapFeatures($plots);
+        $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
 
         ob_start();
         ?>
-        <section class="panel">
-            <p class="eyebrow">Cemetery map</p>
-            <h1>Plot Map</h1>
-            <p class="lede">A working map of cemetery plots grouped by section. Select any plot to open its record, review status, and update location details.</p>
-            <div class="map-legend">
-                <?php foreach ($statuses as $status): ?>
-                    <?php if (($statusCounts[$status] ?? 0) > 0): ?>
-                        <span><i class="plot-key status-<?= e($status) ?>"></i><?= e(pretty($status)) ?> <?= e($statusCounts[$status]) ?></span>
-                    <?php endif; ?>
-                <?php endforeach; ?>
-            </div>
-        </section>
-
-        <?php if (!$plots): ?>
-            <section class="card public-section">
-                <h2>No plots yet</h2>
-                <p class="lede">Add plots first, then the map will display them here.</p>
-                <div class="actions"><a class="button" href="/plots/new">Add plot</a></div>
-            </section>
-        <?php endif; ?>
-
-        <?php foreach ($sections as $sectionLabel => $sectionPlots): ?>
-            <section class="card public-section plot-map-section">
-                <div class="section-heading">
-                    <div>
-                        <p class="card-label"><?= e($sectionLabel) ?></p>
-                        <h2><?= e(count($sectionPlots)) ?> <?= count($sectionPlots) === 1 ? 'plot' : 'plots' ?></h2>
-                    </div>
-                    <a class="table-action" href="/plots">Open plot list</a>
+        <section class="gis-map-shell" data-map-plots="<?= e((string) $mapJson) ?>">
+            <div class="gis-toolbar">
+                <div class="gis-search">
+                    <button class="gis-dropdown" type="button" aria-label="Map search options">⌄</button>
+                    <input id="map-search" type="search" placeholder="Find plot, name, row, or lot">
+                    <button class="gis-search-button" type="button" aria-label="Search map">Search</button>
                 </div>
-                <div class="plot-grid-map">
-                    <?php foreach ($sectionPlots as $plot): ?>
-                        <?php
-                        $location = array_filter([
-                            ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
-                            ($plot['lot'] ?? '') !== '' ? 'Lot ' . $plot['lot'] : '',
-                        ]);
-                        $names = trim((string) ($plot['interment_names'] ?? ''));
-                        $count = (int) ($plot['interment_count'] ?? 0);
-                        $titleParts = array_filter([
-                            $plot['identifier'] ?? '',
-                            pretty((string) ($plot['status'] ?? 'unknown')),
-                            $names,
-                        ]);
-                        ?>
-                        <a class="plot-tile status-<?= e((string) ($plot['status'] ?? 'unknown')) ?>" href="/plots/<?= e($plot['id']) ?>/edit" title="<?= e(implode(' - ', $titleParts)) ?>">
-                            <span class="plot-id"><?= e($plot['identifier']) ?></span>
-                            <span class="plot-location"><?= e($location ? implode(' / ', $location) : 'Location open') ?></span>
-                            <span class="plot-people"><?= e($names !== '' ? $names : ($count > 0 ? $count . ' interments' : 'No interments')) ?></span>
-                        </a>
+                <div class="gis-status-filters" aria-label="Plot status filters">
+                    <?php foreach ($statuses as $status): ?>
+                        <?php if (($statusCounts[$status] ?? 0) > 0): ?>
+                            <label><input type="checkbox" value="<?= e($status) ?>" checked><span class="plot-key status-<?= e($status) ?>"></span><?= e(pretty($status)) ?></label>
+                        <?php endif; ?>
                     <?php endforeach; ?>
                 </div>
-            </section>
-        <?php endforeach; ?>
+            </div>
+            <div class="gis-controls" aria-label="Map controls">
+                <button type="button" data-map-action="zoom-in" aria-label="Zoom in">+</button>
+                <button type="button" data-map-action="zoom-out" aria-label="Zoom out">−</button>
+                <button type="button" data-map-action="home" aria-label="Reset map">⌂</button>
+            </div>
+            <div class="gis-map-stage">
+                <?php if (!$plots): ?>
+                    <div class="gis-empty">
+                        <h1>No plots yet</h1>
+                        <p>Add plots first, then the map will display them here.</p>
+                        <a class="button" href="/plots/new">Add plot</a>
+                    </div>
+                <?php endif; ?>
+                <svg class="gis-map-svg" viewBox="0 0 1600 1000" role="img" aria-label="Interactive cemetery plot map">
+                    <defs>
+                        <pattern id="mapGrass" width="80" height="80" patternUnits="userSpaceOnUse">
+                            <rect width="80" height="80" fill="#dbe4d6"></rect>
+                            <path d="M0 18 H80 M0 55 H80 M22 0 V80 M62 0 V80" stroke="#c7d3c3" stroke-width="1" opacity="0.45"></path>
+                        </pattern>
+                        <filter id="labelShadow" x="-20%" y="-20%" width="140%" height="140%">
+                            <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#ffffff" flood-opacity="0.9"></feDropShadow>
+                        </filter>
+                    </defs>
+                    <rect class="gis-ground" x="0" y="0" width="1600" height="1000"></rect>
+                    <path class="gis-path" d="M-40 650 C250 570 470 545 730 590 S1240 720 1680 610"></path>
+                    <path class="gis-path narrow" d="M120 140 C360 250 570 260 760 190 S1120 90 1510 150"></path>
+                    <g class="gis-map-content"></g>
+                </svg>
+                <div class="gis-attribution">Anesti map view</div>
+            </div>
+            <aside class="gis-details" aria-live="polite">
+                <p class="card-label">Selected plot</p>
+                <h2>Select a plot</h2>
+                <p class="card-detail">Click a plot boundary to view details and open the plot record.</p>
+            </aside>
+        </section>
+        <script>
+        (() => {
+            const shell = document.querySelector('.gis-map-shell');
+            if (!shell) return;
+            const plots = JSON.parse(shell.dataset.mapPlots || '[]');
+            const svg = shell.querySelector('.gis-map-svg');
+            const content = shell.querySelector('.gis-map-content');
+            const details = shell.querySelector('.gis-details');
+            const search = shell.querySelector('#map-search');
+            const filters = Array.from(shell.querySelectorAll('.gis-status-filters input'));
+            const ns = 'http://www.w3.org/2000/svg';
+            let viewBox = { x: 0, y: 0, w: 1600, h: 1000 };
+            let selectedId = '';
+            let isDragging = false;
+            let dragStart = null;
+
+            function setViewBox() {
+                svg.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`);
+            }
+
+            function zoom(multiplier) {
+                const cx = viewBox.x + viewBox.w / 2;
+                const cy = viewBox.y + viewBox.h / 2;
+                viewBox.w = Math.max(220, Math.min(2200, viewBox.w * multiplier));
+                viewBox.h = Math.max(140, Math.min(1400, viewBox.h * multiplier));
+                viewBox.x = cx - viewBox.w / 2;
+                viewBox.y = cy - viewBox.h / 2;
+                setViewBox();
+            }
+
+            function resetView() {
+                viewBox = plotExtent();
+                setViewBox();
+            }
+
+            function plotExtent() {
+                if (!plots.length) return { x: 0, y: 0, w: 1600, h: 1000 };
+                const xs = [];
+                const ys = [];
+                plots.forEach((plot) => {
+                    plot.points.forEach((point) => {
+                        xs.push(point[0]);
+                        ys.push(point[1]);
+                    });
+                });
+                const minX = Math.min(...xs);
+                const maxX = Math.max(...xs);
+                const minY = Math.min(...ys);
+                const maxY = Math.max(...ys);
+                const padding = 120;
+                const width = Math.max(520, maxX - minX + padding * 2);
+                const height = Math.max(320, maxY - minY + padding * 2);
+
+                return {
+                    x: Math.max(0, minX - padding),
+                    y: Math.max(0, minY - padding),
+                    w: width,
+                    h: height
+                };
+            }
+
+            function mapPoint(event) {
+                const point = svg.createSVGPoint();
+                point.x = event.clientX;
+                point.y = event.clientY;
+                return point.matrixTransform(svg.getScreenCTM().inverse());
+            }
+
+            function polygonPoints(plot) {
+                return plot.points.map((point) => `${point[0]},${point[1]}`).join(' ');
+            }
+
+            function plotMatches(plot, term, enabled) {
+                if (!enabled.has(plot.status)) return false;
+                if (!term) return true;
+                return [
+                    plot.identifier,
+                    plot.section,
+                    plot.row,
+                    plot.lot,
+                    plot.statusLabel,
+                    plot.names
+                ].join(' ').toLowerCase().includes(term);
+            }
+
+            function selectPlot(plot) {
+                selectedId = plot.id;
+                details.innerHTML = `
+                    <p class="card-label">Selected plot</p>
+                    <h2>${escapeHtml(plot.identifier)}</h2>
+                    <p class="card-detail">${escapeHtml(plot.section || 'Unsectioned')} · ${escapeHtml(plot.statusLabel)}</p>
+                    <dl class="plot-detail-list">
+                        <div><dt>Location</dt><dd>${escapeHtml(plot.location || 'Not set')}</dd></div>
+                        <div><dt>Interments</dt><dd>${escapeHtml(plot.names || 'None recorded')}</dd></div>
+                        <div><dt>Visibility</dt><dd>${escapeHtml(plot.visibilityLabel)}</dd></div>
+                        <div><dt>Confidence</dt><dd>${escapeHtml(plot.confidenceLabel)}</dd></div>
+                    </dl>
+                    <div class="actions"><a class="button" href="/plots/${encodeURIComponent(plot.id)}/edit">Open plot record</a></div>
+                `;
+                render();
+            }
+
+            function escapeHtml(value) {
+                return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
+            }
+
+            function render() {
+                const term = (search.value || '').trim().toLowerCase();
+                const enabled = new Set(filters.filter((filter) => filter.checked).map((filter) => filter.value));
+                content.innerHTML = '';
+                const sections = new Set();
+                plots.forEach((plot) => {
+                    if (plot.section && !sections.has(plot.section)) {
+                        sections.add(plot.section);
+                        const label = document.createElementNS(ns, 'text');
+                        label.setAttribute('x', plot.sectionLabelX);
+                        label.setAttribute('y', plot.sectionLabelY);
+                        label.setAttribute('class', 'gis-section-label');
+                        label.textContent = plot.section;
+                        content.appendChild(label);
+                    }
+                    const visible = plotMatches(plot, term, enabled);
+                    const group = document.createElementNS(ns, 'g');
+                    group.setAttribute('class', `gis-plot status-${plot.status}${selectedId === plot.id ? ' selected' : ''}${visible ? '' : ' hidden'}`);
+                    group.setAttribute('tabindex', '0');
+                    group.setAttribute('role', 'link');
+                    group.setAttribute('aria-label', `${plot.identifier} ${plot.statusLabel}`);
+                    const polygon = document.createElementNS(ns, 'polygon');
+                    polygon.setAttribute('points', polygonPoints(plot));
+                    const label = document.createElementNS(ns, 'text');
+                    label.setAttribute('x', plot.labelX);
+                    label.setAttribute('y', plot.labelY);
+                    label.setAttribute('class', 'gis-plot-label');
+                    label.textContent = plot.identifier;
+                    const sublabel = document.createElementNS(ns, 'text');
+                    sublabel.setAttribute('x', plot.labelX);
+                    sublabel.setAttribute('y', plot.labelY + 18);
+                    sublabel.setAttribute('class', 'gis-plot-sublabel');
+                    sublabel.textContent = plot.lot ? `Lot ${plot.lot}` : plot.statusLabel;
+                    group.appendChild(polygon);
+                    group.appendChild(label);
+                    group.appendChild(sublabel);
+                    group.addEventListener('click', () => selectPlot(plot));
+                    group.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            selectPlot(plot);
+                        }
+                    });
+                    content.appendChild(group);
+                });
+            }
+
+            shell.querySelector('[data-map-action="zoom-in"]').addEventListener('click', () => zoom(0.78));
+            shell.querySelector('[data-map-action="zoom-out"]').addEventListener('click', () => zoom(1.28));
+            shell.querySelector('[data-map-action="home"]').addEventListener('click', resetView);
+            search.addEventListener('input', render);
+            filters.forEach((filter) => filter.addEventListener('change', render));
+            svg.addEventListener('wheel', (event) => {
+                event.preventDefault();
+                zoom(event.deltaY < 0 ? 0.88 : 1.14);
+            }, { passive: false });
+            svg.addEventListener('pointerdown', (event) => {
+                if (event.target.closest('.gis-plot')) return;
+                isDragging = true;
+                dragStart = mapPoint(event);
+                svg.setPointerCapture(event.pointerId);
+                svg.classList.add('dragging');
+            });
+            svg.addEventListener('pointermove', (event) => {
+                if (!isDragging || !dragStart) return;
+                const current = mapPoint(event);
+                viewBox.x += dragStart.x - current.x;
+                viewBox.y += dragStart.y - current.y;
+                setViewBox();
+            });
+            svg.addEventListener('pointerup', (event) => {
+                isDragging = false;
+                dragStart = null;
+                svg.releasePointerCapture(event.pointerId);
+                svg.classList.remove('dragging');
+            });
+
+            resetView();
+            render();
+        })();
+        </script>
         <?php
         return (string) ob_get_clean();
+    }
+
+    private function mapFeatures(array $plots): array
+    {
+        $sections = [];
+        foreach ($plots as $plot) {
+            $section = trim((string) ($plot['section_code'] ?? '')) !== '' ? 'Section ' . $plot['section_code'] : 'Unsectioned';
+            $sections[$section][] = $plot;
+        }
+
+        $features = [];
+        $sectionIndex = 0;
+        foreach ($sections as $section => $sectionPlots) {
+            $baseX = 140 + ($sectionIndex % 2) * 720;
+            $baseY = 140 + intdiv($sectionIndex, 2) * 360;
+            $sectionIndex++;
+            foreach (array_values($sectionPlots) as $index => $plot) {
+                [$x, $y, $width, $height] = $this->plotBounds($plot, $index, $baseX, $baseY);
+                $names = trim((string) ($plot['interment_names'] ?? ''));
+                $location = array_filter([
+                    ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
+                    ($plot['lot'] ?? '') !== '' ? 'Lot ' . $plot['lot'] : '',
+                ]);
+                $status = (string) ($plot['status'] ?? 'unknown');
+                $features[] = [
+                    'id' => (string) $plot['id'],
+                    'identifier' => (string) $plot['identifier'],
+                    'section' => $section,
+                    'sectionLabelX' => $baseX,
+                    'sectionLabelY' => $baseY - 24,
+                    'row' => (string) ($plot['row_label'] ?? ''),
+                    'lot' => (string) ($plot['lot'] ?? ''),
+                    'location' => $location ? implode(' / ', $location) : '',
+                    'status' => $status,
+                    'statusLabel' => pretty($status),
+                    'visibilityLabel' => pretty((string) ($plot['visibility'] ?? 'unknown')),
+                    'confidenceLabel' => pretty((string) ($plot['confidence'] ?? 'unknown')),
+                    'names' => $names,
+                    'labelX' => $x + 8,
+                    'labelY' => $y + 22,
+                    'points' => [
+                        [$x, $y],
+                        [$x + $width, $y + $this->plotSlant($index)],
+                        [$x + $width - 10, $y + $height],
+                        [$x - 6, $y + $height - $this->plotSlant($index)],
+                    ],
+                ];
+            }
+        }
+
+        return $features;
+    }
+
+    private function plotBounds(array $plot, int $index, int $baseX, int $baseY): array
+    {
+        $geometry = json_decode((string) ($plot['geometry'] ?? ''), true);
+        if (is_array($geometry) && isset($geometry['bounds']) && is_array($geometry['bounds']) && count($geometry['bounds']) === 4) {
+            return array_map('intval', $geometry['bounds']);
+        }
+
+        $row = $this->mapOrdinal((string) ($plot['row_label'] ?? ''), intdiv($index, 8) + 1);
+        $lot = $this->mapOrdinal((string) ($plot['lot'] ?? ''), ($index % 8) + 1);
+        $x = $baseX + (($lot - 1) % 8) * 78;
+        $y = $baseY + (($row - 1) % 4) * 110 + intdiv($lot - 1, 8) * 110;
+
+        return [$x, $y, 68, 96];
+    }
+
+    private function mapOrdinal(string $value, int $fallback): int
+    {
+        if (preg_match('/\d+/', $value, $matches)) {
+            return max(1, (int) $matches[0]);
+        }
+
+        return $fallback;
+    }
+
+    private function plotSlant(int $index): int
+    {
+        return ($index % 3) * 4;
     }
 
     private function tutorial(): string
@@ -924,7 +1185,7 @@ final class App
             <title><?= e($title) ?> - Anesti</title>
             <link rel="stylesheet" href="/assets/app.css">
         </head>
-        <body>
+        <body class="route-<?= e($route) ?>">
         <div class="app">
             <aside class="sidebar">
                 <div class="brand"><div class="brand-mark">A</div><div><p class="brand-title">Anesti</p><p class="brand-subtitle">Cemetery records and maps</p></div></div>

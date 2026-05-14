@@ -348,115 +348,306 @@ h1 {
   box-shadow: 0 2px 8px rgba(29, 43, 52, 0.08);
 }
 
-.map-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  margin-top: 16px;
-}
-
-.map-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted-text);
-  font-size: 13px;
-  font-weight: 700;
-}
-
 .plot-key {
   width: 14px;
   height: 14px;
   border: 1px solid var(--border);
   border-radius: 4px;
+  flex: 0 0 auto;
 }
 
-.plot-map-section {
-  padding: 18px;
+.route-map .content {
+  max-width: none;
+  padding: 0;
 }
 
-.section-heading {
+.gis-map-shell {
+  position: relative;
+  min-height: calc(100vh - 45px);
+  overflow: hidden;
+  background: #bfcbb8;
+}
+
+.gis-toolbar {
+  position: absolute;
+  top: 18px;
+  left: 22px;
+  right: 22px;
+  z-index: 4;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  pointer-events: none;
 }
 
-.plot-grid-map {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.plot-tile {
-  display: grid;
-  min-height: 112px;
-  align-content: start;
-  gap: 7px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+.gis-search {
+  display: flex;
+  width: min(600px, calc(100vw - 420px));
+  min-width: 300px;
+  border: 1px solid rgba(29, 43, 52, 0.25);
+  border-radius: 4px;
   background: #fff;
-  padding: 10px;
-  text-decoration: none;
-  box-shadow: 0 1px 2px rgba(29, 43, 52, 0.04);
+  box-shadow: 0 2px 8px rgba(29, 43, 52, 0.16);
+  pointer-events: auto;
 }
 
-.plot-tile:hover {
-  border-color: var(--primary);
-  box-shadow: 0 4px 14px rgba(29, 43, 52, 0.1);
+.gis-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 12px;
+  font: inherit;
 }
 
-.plot-id {
-  font-size: 16px;
+.gis-search button {
+  border: 0;
+  background: #ff7424;
+  color: #fff;
+  padding: 0 16px;
   font-weight: 800;
 }
 
-.plot-location,
-.plot-people {
+.gis-search .gis-dropdown {
+  border-right: 1px solid var(--border);
+  background: #fff;
+  color: var(--foreground);
+}
+
+.gis-status-filters {
+  display: flex;
+  max-width: 430px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.gis-status-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(29, 43, 52, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(29, 43, 52, 0.08);
+}
+
+.gis-status-filters input {
+  margin: 0;
+}
+
+.gis-controls {
+  position: absolute;
+  top: 78px;
+  left: 22px;
+  z-index: 4;
+  display: grid;
+  gap: 8px;
+}
+
+.gis-controls button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(29, 43, 52, 0.22);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(29, 43, 52, 0.15);
+}
+
+.gis-map-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.gis-map-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.gis-map-svg.dragging {
+  cursor: grabbing;
+}
+
+.gis-ground {
+  fill: url("#mapGrass");
+}
+
+.gis-path {
+  fill: none;
+  stroke: rgba(245, 242, 232, 0.96);
+  stroke-width: 82;
+  stroke-linecap: round;
+}
+
+.gis-path.narrow {
+  stroke-width: 34;
+  opacity: 0.9;
+}
+
+.gis-section-label {
+  fill: #1b2931;
+  font-size: 24px;
+  font-weight: 900;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.9);
+  stroke-width: 4px;
+}
+
+.gis-plot {
+  cursor: pointer;
+}
+
+.gis-plot.hidden {
+  display: none;
+}
+
+.gis-plot polygon {
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.7));
+}
+
+.gis-plot:hover polygon,
+.gis-plot.selected polygon {
+  stroke: #ff6d1f;
+  stroke-width: 5;
+}
+
+.gis-plot-label {
+  fill: #111d24;
+  font-size: 17px;
+  font-weight: 900;
+  pointer-events: none;
+  filter: url("#labelShadow");
+}
+
+.gis-plot-sublabel {
+  fill: #20323c;
+  font-size: 12px;
+  font-weight: 800;
+  pointer-events: none;
+  filter: url("#labelShadow");
+}
+
+.gis-attribution {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  z-index: 3;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 4px 7px;
+  color: var(--muted-text);
+  font-size: 11px;
+}
+
+.gis-details {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  z-index: 4;
+  width: min(360px, calc(100vw - 340px));
+  border: 1px solid rgba(29, 43, 52, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 16px;
+  box-shadow: 0 8px 30px rgba(29, 43, 52, 0.18);
+}
+
+.plot-detail-list {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.plot-detail-list div {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 10px;
+}
+
+.plot-detail-list dt {
   color: var(--muted-text);
   font-size: 12px;
-  line-height: 1.35;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
-.plot-people {
-  font-weight: 700;
+.plot-detail-list dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
-.plot-tile.status-available,
+.gis-empty {
+  position: absolute;
+  top: 110px;
+  left: 76px;
+  z-index: 3;
+  max-width: 420px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 20px;
+  box-shadow: 0 8px 30px rgba(29, 43, 52, 0.15);
+}
+
+.gis-plot.status-available polygon,
 .plot-key.status-available {
+  fill: rgba(129, 184, 145, 0.45);
+  stroke: #4d9964;
   background: #edf7f1;
   border-color: #a9cdb7;
 }
 
-.plot-tile.status-reserved,
+.gis-plot.status-reserved polygon,
 .plot-key.status-reserved,
-.plot-tile.status-sold,
+.gis-plot.status-sold polygon,
 .plot-key.status-sold {
+  fill: rgba(245, 205, 89, 0.42);
+  stroke: #bb8e0b;
   background: #fff8df;
   border-color: #dbc77c;
 }
 
-.plot-tile.status-occupied,
+.gis-plot.status-occupied polygon,
 .plot-key.status-occupied {
+  fill: rgba(114, 164, 218, 0.44);
+  stroke: #4f7fb5;
   background: #eef4fb;
   border-color: #a9bfd9;
 }
 
-.plot-tile.status-needs_verification,
+.gis-plot.status-needs_verification polygon,
 .plot-key.status-needs_verification {
+  fill: rgba(255, 164, 48, 0.52);
+  stroke: #d67800;
   background: #fff1d8;
   border-color: #d6a13b;
 }
 
-.plot-tile.status-unusable,
+.gis-plot.status-unusable polygon,
 .plot-key.status-unusable {
+  fill: rgba(190, 103, 116, 0.42);
+  stroke: #a14552;
   background: #f4e8ea;
   border-color: #cf9aa2;
 }
 
-.plot-tile.status-unknown,
+.gis-plot.status-unknown polygon,
 .plot-key.status-unknown {
+  fill: rgba(230, 235, 234, 0.58);
+  stroke: #7b898c;
   background: #f4f6f6;
   border-color: var(--border);
 }
