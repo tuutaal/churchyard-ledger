@@ -86,7 +86,20 @@ final class App
             return;
         }
 
-        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'imports', 'exports', 'custom-fields'];
+        if ($segments[0] === 'admin') {
+            $html = match ($segments[1] ?? '') {
+                '' => $this->admin(),
+                'map' => $this->adminMap(),
+                'users' => $this->adminUsers(),
+                default => null,
+            };
+            if ($html !== null) {
+                $this->layout('Admin', 'admin', $html);
+                return;
+            }
+        }
+
+        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'imports', 'exports', 'custom-fields', 'admin'];
         if (!in_array($route, $known, true)) {
             http_response_code(404);
             $this->layout('Not Found', 'not-found', '<div class="panel"><h1>Page not found</h1></div>');
@@ -104,6 +117,7 @@ final class App
             'imports' => $this->imports(),
             'exports' => $this->exports(),
             'custom-fields' => $this->customFields(),
+            'admin' => $this->admin(),
             default => $this->dashboard(),
         };
 
@@ -270,6 +284,7 @@ final class App
         $statuses = ['available', 'reserved', 'occupied', 'sold', 'needs_verification', 'unusable', 'unknown'];
         $mapData = $this->mapFeatures($plots);
         $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+        $mapLayer = $this->repository->mapLayer();
 
         ob_start();
         ?>
@@ -311,12 +326,16 @@ final class App
                             <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#ffffff" flood-opacity="0.9"></feDropShadow>
                         </filter>
                     </defs>
-                    <rect class="gis-ground" x="0" y="0" width="1600" height="1000"></rect>
-                    <path class="gis-path" d="M-40 650 C250 570 470 545 730 590 S1240 720 1680 610"></path>
-                    <path class="gis-path narrow" d="M120 140 C360 250 570 260 760 190 S1120 90 1510 150"></path>
+                    <?php if (!empty($mapLayer['source_url'])): ?>
+                        <image class="gis-map-image" href="<?= e($mapLayer['source_url']) ?>" x="0" y="0" width="1600" height="1000" preserveAspectRatio="xMidYMid slice"></image>
+                    <?php else: ?>
+                        <rect class="gis-ground" x="0" y="0" width="1600" height="1000"></rect>
+                        <path class="gis-path" d="M-40 650 C250 570 470 545 730 590 S1240 720 1680 610"></path>
+                        <path class="gis-path narrow" d="M120 140 C360 250 570 260 760 190 S1120 90 1510 150"></path>
+                    <?php endif; ?>
                     <g class="gis-map-content"></g>
                 </svg>
-                <div class="gis-attribution">Anesti map view</div>
+                <div class="gis-attribution"><?= !empty($mapLayer['source_url']) ? e($mapLayer['name'] ?? 'Cemetery map') : 'Anesti map view' ?></div>
             </div>
             <aside class="gis-details" aria-live="polite">
                 <p class="card-label">Selected plot</p>
@@ -530,7 +549,11 @@ final class App
             $baseY = 140 + intdiv($sectionIndex, 2) * 360;
             $sectionIndex++;
             foreach (array_values($sectionPlots) as $index => $plot) {
-                [$x, $y, $width, $height] = $this->plotBounds($plot, $index, $baseX, $baseY);
+                $points = $this->plotPoints($plot, $index, $baseX, $baseY);
+                $xs = array_column($points, 0);
+                $ys = array_column($points, 1);
+                $labelX = min($xs) + 8;
+                $labelY = min($ys) + 22;
                 $names = trim((string) ($plot['interment_names'] ?? ''));
                 $location = array_filter([
                     ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
@@ -551,14 +574,9 @@ final class App
                     'visibilityLabel' => pretty((string) ($plot['visibility'] ?? 'unknown')),
                     'confidenceLabel' => pretty((string) ($plot['confidence'] ?? 'unknown')),
                     'names' => $names,
-                    'labelX' => $x + 8,
-                    'labelY' => $y + 22,
-                    'points' => [
-                        [$x, $y],
-                        [$x + $width, $y + $this->plotSlant($index)],
-                        [$x + $width - 10, $y + $height],
-                        [$x - 6, $y + $height - $this->plotSlant($index)],
-                    ],
+                    'labelX' => $labelX,
+                    'labelY' => $labelY,
+                    'points' => $points,
                 ];
             }
         }
@@ -566,19 +584,61 @@ final class App
         return $features;
     }
 
-    private function plotBounds(array $plot, int $index, int $baseX, int $baseY): array
+    private function plotPoints(array $plot, int $index, int $baseX, int $baseY): array
     {
         $geometry = json_decode((string) ($plot['geometry'] ?? ''), true);
-        if (is_array($geometry) && isset($geometry['bounds']) && is_array($geometry['bounds']) && count($geometry['bounds']) === 4) {
-            return array_map('intval', $geometry['bounds']);
+        if (is_array($geometry)) {
+            if (isset($geometry['points']) && is_array($geometry['points'])) {
+                $points = $this->validMapPoints($geometry['points']);
+                if ($points) {
+                    return $points;
+                }
+            }
+
+            if (isset($geometry['coordinates'][0]) && is_array($geometry['coordinates'][0])) {
+                $points = $this->validMapPoints($geometry['coordinates'][0]);
+                if ($points) {
+                    return $points;
+                }
+            }
+
+            if (isset($geometry['bounds']) && is_array($geometry['bounds']) && count($geometry['bounds']) === 4) {
+                [$x, $y, $width, $height] = array_map('intval', $geometry['bounds']);
+                return [
+                    [$x, $y],
+                    [$x + $width, $y + $this->plotSlant($index)],
+                    [$x + $width - 10, $y + $height],
+                    [$x - 6, $y + $height - $this->plotSlant($index)],
+                ];
+            }
         }
 
         $row = $this->mapOrdinal((string) ($plot['row_label'] ?? ''), intdiv($index, 8) + 1);
         $lot = $this->mapOrdinal((string) ($plot['lot'] ?? ''), ($index % 8) + 1);
         $x = $baseX + (($lot - 1) % 8) * 78;
         $y = $baseY + (($row - 1) % 4) * 110 + intdiv($lot - 1, 8) * 110;
+        $width = 68;
+        $height = 96;
 
-        return [$x, $y, 68, 96];
+        return [
+            [$x, $y],
+            [$x + $width, $y + $this->plotSlant($index)],
+            [$x + $width - 10, $y + $height],
+            [$x - 6, $y + $height - $this->plotSlant($index)],
+        ];
+    }
+
+    private function validMapPoints(array $points): array
+    {
+        $valid = [];
+        foreach ($points as $point) {
+            if (!is_array($point) || count($point) < 2 || !is_numeric($point[0]) || !is_numeric($point[1])) {
+                continue;
+            }
+            $valid[] = [(int) round((float) $point[0]), (int) round((float) $point[1])];
+        }
+
+        return count($valid) >= 3 ? $valid : [];
     }
 
     private function mapOrdinal(string $value, int $fallback): int
@@ -671,6 +731,275 @@ final class App
                     </div>
                 <?php endforeach; ?>
             </div>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function admin(): string
+    {
+        $cards = [
+            ['label' => 'Map Setup', 'href' => '/admin/map', 'detail' => 'Upload a cemetery map image and draw plot boundaries over it.'],
+            ['label' => 'Custom Fields', 'href' => '/custom-fields', 'detail' => 'Create local categories and import-aware fields for people, plots, and interments.'],
+            ['label' => 'Users', 'href' => '/admin/users', 'detail' => 'Create admin and editor accounts ahead of the login system.'],
+            ['label' => 'Imports', 'href' => '/imports', 'detail' => 'Bring spreadsheet records into Anesti with CSV templates.'],
+            ['label' => 'Exports', 'href' => '/exports', 'detail' => 'Download portable CSV backups of cemetery records and media.'],
+            ['label' => 'Install', 'href' => '/install', 'detail' => 'Review hosting and database setup for this installation.'],
+        ];
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Administration</p>
+            <h1>Admin Settings</h1>
+            <p class="lede">A single setup area for cemetery configuration, map work, users, imports, exports, and local record fields.</p>
+        </section>
+        <section class="metrics admin-grid">
+            <?php foreach ($cards as $card): ?>
+                <a class="card admin-card" href="<?= e($card['href']) ?>">
+                    <p class="card-label"><?= e($card['label']) ?></p>
+                    <p class="card-detail"><?= e($card['detail']) ?></p>
+                </a>
+            <?php endforeach; ?>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function adminMap(): string
+    {
+        $message = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $action = (string) ($_POST['action'] ?? '');
+            if ($action === 'map_layer') {
+                $message = $this->repository->saveMapLayer($_POST, $_FILES, $this->root)
+                    ? 'Map background saved.'
+                    : 'Could not save the map background. Choose an image file or enter an image URL.';
+            } elseif ($action === 'plot_geometry') {
+                $message = $this->repository->savePlotGeometry((string) ($_POST['plot_id'] ?? ''), (string) ($_POST['geometry_json'] ?? ''))
+                    ? 'Plot boundary saved.'
+                    : 'Could not save the plot boundary. Choose a plot and draw at least three points.';
+            }
+        }
+
+        $plots = $this->repository->mapPlots();
+        $mapData = $this->mapFeatures($plots);
+        $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+        $mapLayer = $this->repository->mapLayer();
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Map administration</p>
+            <h1>Map Setup</h1>
+            <p class="lede">Upload a scanned cemetery map, aerial image, or site plan, then trace plot boundaries so the public map behaves more like a parcel GIS viewer.</p>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <form class="form record-form" method="post" enctype="multipart/form-data">
+                <input type="hidden" name="action" value="map_layer">
+                <label>Map name <input name="name" value="<?= e($mapLayer['name'] ?? 'Cemetery map') ?>"></label>
+                <label>Image URL <input name="source_url" value="<?= e($mapLayer['source_url'] ?? '') ?>" placeholder="https://example.org/cemetery-map.jpg"></label>
+                <label class="full">Upload map image <input name="map_image" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
+                <?= $this->select('confidence', 'Map confidence', $mapLayer['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
+                <?= $this->select('visibility', 'Map visibility', $mapLayer['visibility'] ?? 'private', ['private', 'public']) ?>
+                <div class="actions full">
+                    <button class="button" type="submit">Save map background</button>
+                    <a class="button secondary" href="/map">Open map</a>
+                </div>
+            </form>
+        </section>
+        <section class="panel public-section">
+            <p class="eyebrow">Boundary editor</p>
+            <h1>Draw Plot Boundaries</h1>
+            <p class="lede">Choose a plot, click around its corners on the map, then save. Existing boundaries can be redrawn the same way.</p>
+            <div class="map-editor" data-admin-map-plots="<?= e((string) $mapJson) ?>">
+                <div class="map-editor-stage">
+                    <svg class="gis-map-svg admin-map-svg" viewBox="0 0 1600 1000" role="img" aria-label="Editable cemetery plot map">
+                        <defs>
+                            <pattern id="adminMapGrass" width="80" height="80" patternUnits="userSpaceOnUse">
+                                <rect width="80" height="80" fill="#dbe4d6"></rect>
+                                <path d="M0 18 H80 M0 55 H80 M22 0 V80 M62 0 V80" stroke="#c7d3c3" stroke-width="1" opacity="0.45"></path>
+                            </pattern>
+                        </defs>
+                        <?php if (!empty($mapLayer['source_url'])): ?>
+                            <image class="gis-map-image" href="<?= e($mapLayer['source_url']) ?>" x="0" y="0" width="1600" height="1000" preserveAspectRatio="xMidYMid slice"></image>
+                        <?php else: ?>
+                            <rect class="admin-gis-ground" x="0" y="0" width="1600" height="1000"></rect>
+                            <path class="gis-path" d="M-40 650 C250 570 470 545 730 590 S1240 720 1680 610"></path>
+                            <path class="gis-path narrow" d="M120 140 C360 250 570 260 760 190 S1120 90 1510 150"></path>
+                        <?php endif; ?>
+                        <g class="admin-map-boundaries"></g>
+                        <polyline class="admin-map-draft" points=""></polyline>
+                    </svg>
+                </div>
+                <form class="form map-editor-tools" method="post">
+                    <input type="hidden" name="action" value="plot_geometry">
+                    <input type="hidden" name="geometry_json" value="">
+                    <label class="full">Plot
+                        <select name="plot_id" required>
+                            <option value="">Choose a plot</option>
+                            <?php foreach ($mapData as $plot): ?>
+                                <option value="<?= e($plot['id']) ?>"><?= e($plot['identifier'] . ' - ' . $plot['section']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <div class="actions full">
+                        <button class="button secondary" type="button" data-editor-action="draw">Draw boundary</button>
+                        <button class="button secondary" type="button" data-editor-action="undo">Undo point</button>
+                        <button class="button secondary" type="button" data-editor-action="clear">Clear draft</button>
+                    </div>
+                    <div class="notice full map-editor-status">Choose a plot, then use Draw boundary.</div>
+                    <button class="button full" type="submit">Save plot boundary</button>
+                </form>
+            </div>
+        </section>
+        <script>
+        (() => {
+            const editor = document.querySelector('.map-editor');
+            if (!editor) return;
+            const plots = JSON.parse(editor.dataset.adminMapPlots || '[]');
+            const svg = editor.querySelector('.admin-map-svg');
+            const content = editor.querySelector('.admin-map-boundaries');
+            const draftLine = editor.querySelector('.admin-map-draft');
+            const select = editor.querySelector('select[name="plot_id"]');
+            const geometryInput = editor.querySelector('input[name="geometry_json"]');
+            const status = editor.querySelector('.map-editor-status');
+            const ns = 'http://www.w3.org/2000/svg';
+            let drawing = false;
+            let draft = [];
+
+            function mapPoint(event) {
+                const point = svg.createSVGPoint();
+                point.x = event.clientX;
+                point.y = event.clientY;
+                const mapped = point.matrixTransform(svg.getScreenCTM().inverse());
+                return [Math.round(mapped.x), Math.round(mapped.y)];
+            }
+
+            function pointsText(points) {
+                return points.map((point) => `${point[0]},${point[1]}`).join(' ');
+            }
+
+            function selectedPlot() {
+                return plots.find((plot) => plot.id === select.value) || null;
+            }
+
+            function render() {
+                content.innerHTML = '';
+                plots.forEach((plot) => {
+                    const group = document.createElementNS(ns, 'g');
+                    group.setAttribute('class', `gis-plot status-${plot.status}${plot.id === select.value ? ' selected' : ''}`);
+                    const polygon = document.createElementNS(ns, 'polygon');
+                    polygon.setAttribute('points', pointsText(plot.points));
+                    const label = document.createElementNS(ns, 'text');
+                    label.setAttribute('x', plot.labelX);
+                    label.setAttribute('y', plot.labelY);
+                    label.setAttribute('class', 'gis-plot-label');
+                    label.textContent = plot.identifier;
+                    group.appendChild(polygon);
+                    group.appendChild(label);
+                    group.addEventListener('click', () => {
+                        select.value = plot.id;
+                        draft = plot.points.slice();
+                        updateDraft();
+                        render();
+                    });
+                    content.appendChild(group);
+                });
+            }
+
+            function updateDraft() {
+                draftLine.setAttribute('points', pointsText(draft));
+                geometryInput.value = draft.length >= 3 ? JSON.stringify({ type: 'Polygon', points: draft }) : '';
+                const plot = selectedPlot();
+                if (!plot) {
+                    status.textContent = 'Choose a plot, then use Draw boundary.';
+                } else if (drawing) {
+                    status.textContent = `Drawing ${plot.identifier}: click each corner in order. ${draft.length} point${draft.length === 1 ? '' : 's'} selected.`;
+                } else {
+                    status.textContent = `${plot.identifier} selected. Use Draw boundary to redraw it, or save the shown draft.`;
+                }
+            }
+
+            editor.querySelector('[data-editor-action="draw"]').addEventListener('click', () => {
+                drawing = true;
+                draft = [];
+                updateDraft();
+            });
+            editor.querySelector('[data-editor-action="undo"]').addEventListener('click', () => {
+                draft.pop();
+                updateDraft();
+            });
+            editor.querySelector('[data-editor-action="clear"]').addEventListener('click', () => {
+                draft = [];
+                drawing = false;
+                updateDraft();
+            });
+            select.addEventListener('change', () => {
+                const plot = selectedPlot();
+                draft = plot ? plot.points.slice() : [];
+                drawing = false;
+                updateDraft();
+                render();
+            });
+            svg.addEventListener('click', (event) => {
+                if (!drawing || !select.value) return;
+                draft.push(mapPoint(event));
+                updateDraft();
+            });
+
+            render();
+            updateDraft();
+        })();
+        </script>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function adminUsers(): string
+    {
+        $message = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $message = $this->repository->saveUser($_POST)
+                ? 'User saved.'
+                : 'Could not save the user. Check the email address.';
+        }
+
+        $users = $this->repository->users();
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Users</p>
+            <h1>User Setup</h1>
+            <p class="lede">Create the users and roles now so the login system can protect admin and editor tools next.</p>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <form class="form record-form" method="post">
+                <label>Email <input name="email" type="email" value="<?= e($_POST['email'] ?? '') ?>" required></label>
+                <label>Name <input name="name" value="<?= e($_POST['name'] ?? '') ?>"></label>
+                <?= $this->select('role', 'Role', (string) ($_POST['role'] ?? 'editor'), ['admin', 'editor', 'viewer']) ?>
+                <label>Password <input name="password" type="password" placeholder="Optional until login is enabled"></label>
+                <div class="actions full"><button class="button" type="submit">Save user</button></div>
+            </form>
+        </section>
+        <section class="card public-section">
+            <h2>Configured Users</h2>
+            <?php if (!$users): ?>
+                <p class="lede">No users are configured yet.</p>
+            <?php else: ?>
+                <table class="table" style="margin-top:14px">
+                    <thead><tr><th>Email</th><th>Name</th><th>Role</th><th>System admin</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($users as $user): ?>
+                        <tr>
+                            <td><strong><?= e($user['email']) ?></strong></td>
+                            <td><?= e($user['name'] ?? '') ?></td>
+                            <td><?= e(pretty($user['role'] ?? 'viewer')) ?></td>
+                            <td><?= ((int) $user['is_system_admin']) === 1 ? 'Yes' : 'No' ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
         </section>
         <?php
         return (string) ob_get_clean();
@@ -1175,7 +1504,7 @@ final class App
 
     private function layout(string $title, string $route, string $content): void
     {
-        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'imports' => 'Imports', 'custom-fields' => 'Custom Fields', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
+        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'admin' => 'Admin', 'imports' => 'Imports', 'custom-fields' => 'Custom Fields', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
         ?>
         <!doctype html>
         <html lang="en">

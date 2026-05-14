@@ -262,6 +262,120 @@ final class Repository
         }
     }
 
+    public function mapLayer(): ?array
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        try {
+            $statement = $this->db->prepare(
+                "select id, name, layer_type, source_url, source_metadata, visibility, confidence
+                 from map_layers
+                 where cemetery_id = :cemetery_id and layer_type = 'uploaded_image'
+                 order by sort_order, created_at desc
+                 limit 1"
+            );
+            $statement->execute(['cemetery_id' => $this->cemeteryId()]);
+            return $statement->fetch() ?: null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public function saveMapLayer(array $data, array $files = [], string $root = ''): bool
+    {
+        if ($this->db === null) {
+            return false;
+        }
+
+        $sourceUrl = $this->blankToNull($data['source_url'] ?? null);
+        $uploadedUrl = $this->storeMapUpload($files, $root);
+        if ($uploadedUrl !== null) {
+            $sourceUrl = $uploadedUrl;
+        }
+
+        if ($sourceUrl === null) {
+            return false;
+        }
+
+        $name = trim((string) ($data['name'] ?? 'Cemetery map'));
+        if ($name === '') {
+            $name = 'Cemetery map';
+        }
+
+        try {
+            $existing = $this->mapLayer();
+            $values = [
+                'id' => $existing['id'] ?? self::id(),
+                'cemetery_id' => $this->cemeteryId(),
+                'name' => $name,
+                'source_url' => $sourceUrl,
+                'visibility' => $this->allowed($data['visibility'] ?? '', ['private', 'public'], 'private'),
+                'confidence' => $this->allowed($data['confidence'] ?? '', ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+            ];
+
+            if ($existing) {
+                $this->db->prepare(
+                    'update map_layers
+                     set name = :name, source_url = :source_url, visibility = :visibility, confidence = :confidence
+                     where id = :id'
+                )->execute(array_diff_key($values, ['cemetery_id' => true]));
+                $this->audit('update', 'Map Layer', (string) $values['id'], 'Updated cemetery map background');
+            } else {
+                $this->db->prepare(
+                    "insert into map_layers (id, cemetery_id, name, layer_type, source_url, visibility, confidence)
+                     values (:id, :cemetery_id, :name, 'uploaded_image', :source_url, :visibility, :confidence)"
+                )->execute($values);
+                $this->audit('create', 'Map Layer', (string) $values['id'], 'Added cemetery map background');
+            }
+
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    public function savePlotGeometry(string $plotId, string $geometryJson): bool
+    {
+        if ($this->db === null || $plotId === '') {
+            return false;
+        }
+
+        $geometry = json_decode($geometryJson, true);
+        if (!is_array($geometry)) {
+            return false;
+        }
+
+        $points = $geometry['points'] ?? [];
+        if (!is_array($points) || count($points) < 3 || count($points) > 30) {
+            return false;
+        }
+
+        $normalized = [];
+        foreach ($points as $point) {
+            if (!is_array($point) || count($point) < 2 || !is_numeric($point[0]) || !is_numeric($point[1])) {
+                return false;
+            }
+
+            $x = max(0, min(10000, (int) round((float) $point[0])));
+            $y = max(0, min(10000, (int) round((float) $point[1])));
+            $normalized[] = [$x, $y];
+        }
+
+        try {
+            $statement = $this->db->prepare('update plots set geometry = :geometry where id = :id');
+            $statement->execute([
+                'id' => $plotId,
+                'geometry' => json_encode(['type' => 'Polygon', 'points' => $normalized]),
+            ]);
+            $this->audit('update', 'Plot', $plotId, 'Updated plot map boundary');
+            return $this->plot($plotId) !== null;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
     public function savePlot(?string $id, array $data): ?string
     {
         if ($this->db === null || trim((string) ($data['identifier'] ?? '')) === '') {
@@ -384,6 +498,79 @@ final class Repository
             return $this->db->query('select id, identifier from plots order by identifier')->fetchAll();
         } catch (Throwable) {
             return [];
+        }
+    }
+
+    public function users(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            return $this->db->query(
+                'select users.id, users.email, users.name, users.is_system_admin, organization_members.role
+                 from users
+                 left join organization_members on organization_members.user_id = users.id
+                 order by users.email'
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function saveUser(array $data): bool
+    {
+        if ($this->db === null || !filter_var((string) ($data['email'] ?? ''), FILTER_VALIDATE_EMAIL)) {
+            return false;
+        }
+
+        $email = strtolower(trim((string) $data['email']));
+        $name = $this->blankToNull($data['name'] ?? null);
+        $role = $this->allowed($data['role'] ?? '', ['admin', 'editor', 'viewer'], 'editor');
+        $password = trim((string) ($data['password'] ?? ''));
+
+        try {
+            $statement = $this->db->prepare('select id from users where email = :email limit 1');
+            $statement->execute(['email' => $email]);
+            $userId = $statement->fetchColumn();
+            $userId = $userId === false ? self::id() : (string) $userId;
+
+            if ($this->userExists($userId)) {
+                $values = ['id' => $userId, 'email' => $email, 'name' => $name];
+                $passwordSql = '';
+                if ($password !== '') {
+                    $passwordSql = ', hashed_password = :hashed_password';
+                    $values['hashed_password'] = password_hash($password, PASSWORD_DEFAULT);
+                }
+                $this->db->prepare('update users set email = :email, name = :name' . $passwordSql . ' where id = :id')->execute($values);
+            } else {
+                $this->db->prepare(
+                    'insert into users (id, email, name, hashed_password)
+                     values (:id, :email, :name, :hashed_password)'
+                )->execute([
+                    'id' => $userId,
+                    'email' => $email,
+                    'name' => $name,
+                    'hashed_password' => $password !== '' ? password_hash($password, PASSWORD_DEFAULT) : null,
+                ]);
+            }
+
+            $this->db->prepare(
+                'insert into organization_members (id, organization_id, user_id, role)
+                 values (:id, :organization_id, :user_id, :role)
+                 on duplicate key update role = values(role)'
+            )->execute([
+                'id' => self::id(),
+                'organization_id' => $this->organizationId(),
+                'user_id' => $userId,
+                'role' => $role,
+            ]);
+
+            $this->audit('setup', 'User', $userId, 'Saved user ' . $email . ' as ' . $role);
+            return true;
+        } catch (Throwable) {
+            return false;
         }
     }
 
@@ -1116,6 +1303,57 @@ final class Repository
             $this->audit('create', 'Media', $intermentId, 'Uploaded grave photo');
         } catch (Throwable) {
         }
+    }
+
+    private function storeMapUpload(array $files, string $root): ?string
+    {
+        if ($root === '' || empty($files['map_image']) || !is_array($files['map_image'])) {
+            return null;
+        }
+
+        $file = $files['map_image'];
+        if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+            return null;
+        }
+
+        if (($file['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK || (int) ($file['size'] ?? 0) > 16 * 1024 * 1024) {
+            return null;
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return null;
+        }
+
+        $extension = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+        $extensions = ['jpg' => 'jpg', 'jpeg' => 'jpg', 'png' => 'png', 'gif' => 'gif', 'webp' => 'webp'];
+        if (!isset($extensions[$extension]) || @getimagesize($tmpName) === false) {
+            return null;
+        }
+
+        $directory = rtrim($root, '/\\') . '/uploads/maps';
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            return null;
+        }
+
+        $fileName = self::id() . '.' . $extensions[$extension];
+        if (!move_uploaded_file($tmpName, $directory . '/' . $fileName)) {
+            return null;
+        }
+
+        return '/uploads/maps/' . $fileName;
+    }
+
+    private function userExists(string $id): bool
+    {
+        if ($this->db === null) {
+            return false;
+        }
+
+        $statement = $this->db->prepare('select count(*) from users where id = :id');
+        $statement->execute(['id' => $id]);
+
+        return (int) $statement->fetchColumn() > 0;
     }
 
     private function blankToNull(mixed $value): ?string
