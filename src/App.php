@@ -777,6 +777,27 @@ final class App
                 $message = $this->repository->saveMapLayer($_POST, $_FILES, $this->root)
                     ? ($coordinatesSaved ? 'Map background saved.' : 'Map background saved, but GPS coordinates were not updated.')
                     : 'Could not save the map background. Choose an image file or enter an image URL.';
+            } elseif ($action === 'find_aerial_photo') {
+                $address = trim((string) ($_POST['cemetery_address'] ?? ''));
+                $coordinates = $address === '' ? null : $this->geocodeAddress($address);
+                if ($coordinates === null) {
+                    $message = 'Address was not found. Try adding the city, state, and ZIP code.';
+                } else {
+                    [$width, $height] = $this->mapAreaSize((string) ($_POST['area_size'] ?? '900,560'));
+                    $layerData = $_POST;
+                    $layerData['latitude'] = number_format($coordinates['latitude'], 7, '.', '');
+                    $layerData['longitude'] = number_format($coordinates['longitude'], 7, '.', '');
+                    $layerData['source_url'] = $this->usgsImageUrl($coordinates['latitude'], $coordinates['longitude'], $width, $height);
+                    if (trim((string) ($layerData['name'] ?? '')) === '' || trim((string) ($layerData['name'] ?? '')) === 'Cemetery map') {
+                        $layerData['name'] = 'Aerial photo';
+                    }
+                    $coordinatesSaved = $this->repository->saveCemeteryCoordinates($layerData);
+                    $mapSaved = $this->repository->saveMapLayer($layerData, [], $this->root);
+                    $_POST = $layerData;
+                    $message = $mapSaved && $coordinatesSaved
+                        ? 'Aerial photo saved as the map background.'
+                        : 'Address was found, but the aerial photo could not be saved.';
+                }
             } elseif ($action === 'cemetery_coordinates') {
                 $message = $this->repository->saveCemeteryCoordinates($_POST)
                     ? 'GPS coordinates saved.'
@@ -806,7 +827,7 @@ final class App
         <section class="panel">
             <p class="eyebrow">Map administration</p>
             <h1>Map Setup</h1>
-            <p class="lede">Import a scanned cemetery map, aerial image, or site plan, then trace plot boundaries so the public map behaves more like a parcel GIS viewer.</p>
+            <p class="lede">Get an aerial photo for the cemetery, upload a map image, then draw plot boundaries over it.</p>
             <?php if ($message): ?>
                 <div class="notice">
                     <?= e($message) ?>
@@ -817,26 +838,47 @@ final class App
             <?php endif; ?>
             <form class="form record-form" method="post" enctype="multipart/form-data">
                 <label>Map name <input name="name" data-map-name value="<?= e($mapLayer['name'] ?? 'Cemetery map') ?>"></label>
-                <label>Image URL <input name="source_url" data-map-source-url value="<?= e($mapLayer['source_url'] ?? '') ?>" placeholder="https://example.org/cemetery-map.jpg"></label>
                 <div class="full usgs-image-helper">
-                    <p class="card-label">USGS NAIP image helper</p>
+                    <p class="card-label">Get an aerial photo</p>
+                    <label class="full">Cemetery street address
+                        <input name="cemetery_address" placeholder="123 Church Rd, Town, WI 54494" value="<?= e($_POST['cemetery_address'] ?? '') ?>">
+                    </label>
                     <div class="usgs-helper-grid">
-                        <label>GPS latitude <input name="latitude" data-usgs-lat inputmode="decimal" value="<?= e($cemetery['latitude'] ?? '') ?>" placeholder="44.3900"></label>
-                        <label>GPS longitude <input name="longitude" data-usgs-lon inputmode="decimal" value="<?= e($cemetery['longitude'] ?? '') ?>" placeholder="-89.8200"></label>
-                        <label>Width in feet <input data-usgs-width inputmode="numeric" value="900"></label>
-                        <label>Height in feet <input data-usgs-height inputmode="numeric" value="560"></label>
+                        <label>Area size
+                            <select name="area_size" data-usgs-area-size>
+                                <option value="900,560"<?= (($_POST['area_size'] ?? '900,560') === '900,560') ? ' selected' : '' ?>>Typical church cemetery</option>
+                                <option value="500,320"<?= (($_POST['area_size'] ?? '') === '500,320') ? ' selected' : '' ?>>Small cemetery</option>
+                                <option value="1600,1000"<?= (($_POST['area_size'] ?? '') === '1600,1000') ? ' selected' : '' ?>>Large cemetery</option>
+                            </select>
+                        </label>
                     </div>
                     <div class="actions usgs-helper-actions">
-                        <button class="button secondary" type="button" data-usgs-action="generate">Use USGS image URL</button>
-                        <a class="button secondary mode-hidden" data-usgs-preview-link href="#" target="_blank" rel="noopener">Preview image</a>
+                        <button class="button secondary" name="action" value="find_aerial_photo" type="submit">Find aerial photo</button>
+                        <a class="button secondary<?= empty($mapLayer['source_url']) ? ' mode-hidden' : '' ?>" data-usgs-preview-link href="<?= e($mapLayer['source_url'] ?? '#') ?>" target="_blank" rel="noopener">Preview aerial photo</a>
                     </div>
                     <div class="notice mode-hidden" data-usgs-status></div>
+                    <details class="map-setup-advanced">
+                        <summary>Advanced: GPS coordinates</summary>
+                        <div class="usgs-helper-grid">
+                            <label>Cemetery latitude <input name="latitude" data-usgs-lat inputmode="decimal" value="<?= e($cemetery['latitude'] ?? '') ?>" placeholder="44.3900"></label>
+                            <label>Cemetery longitude <input name="longitude" data-usgs-lon inputmode="decimal" value="<?= e($cemetery['longitude'] ?? '') ?>" placeholder="-89.8200"></label>
+                            <label>Photo width in feet <input data-usgs-width inputmode="numeric" value="900"></label>
+                            <label>Photo height in feet <input data-usgs-height inputmode="numeric" value="560"></label>
+                        </div>
+                        <div class="actions usgs-helper-actions">
+                            <button class="button secondary" type="button" data-usgs-action="generate">Use GPS coordinates</button>
+                        </div>
+                    </details>
                 </div>
-                <label class="full">Import map image <input name="map_image" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
+                <details class="full advanced-map-source">
+                    <summary>Advanced: use an image URL</summary>
+                    <label>Image URL <input name="source_url" data-map-source-url value="<?= e($mapLayer['source_url'] ?? '') ?>" placeholder="https://example.org/cemetery-map.jpg"></label>
+                </details>
+                <label class="full">Or upload a map image <input name="map_image" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
                 <?= $this->select('confidence', 'Map confidence', $mapLayer['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
                 <?= $this->select('visibility', 'Map visibility', $mapLayer['visibility'] ?? 'private', ['private', 'public']) ?>
                 <div class="actions full">
-                    <button class="button" name="action" value="map_layer" type="submit">Import map background</button>
+                    <button class="button" name="action" value="map_layer" type="submit">Save map background</button>
                     <button class="button secondary" name="action" value="cemetery_coordinates" type="submit">Save GPS coordinates</button>
                     <a class="button secondary" href="/map">Open map</a>
                 </div>
@@ -921,6 +963,7 @@ final class App
             if (!helper) return;
             const sourceUrl = document.querySelector('[data-map-source-url]');
             const mapName = document.querySelector('[data-map-name]');
+            const areaSize = helper.querySelector('[data-usgs-area-size]');
             const latitude = helper.querySelector('[data-usgs-lat]');
             const longitude = helper.querySelector('[data-usgs-lon]');
             const widthFeet = helper.querySelector('[data-usgs-width]');
@@ -939,14 +982,21 @@ final class App
                 return Number.isFinite(value) ? value : null;
             }
 
-            helper.querySelector('[data-usgs-action="generate"]').addEventListener('click', () => {
+            function syncAreaSize() {
+                const [width, height] = areaSize.value.split(',');
+                widthFeet.value = width;
+                heightFeet.value = height;
+            }
+
+            function generateAerialPhoto() {
+                syncAreaSize();
                 const lat = numericValue(latitude);
                 const lon = numericValue(longitude);
                 const width = numericValue(widthFeet);
                 const height = numericValue(heightFeet);
                 if (lat === null || lon === null || width === null || height === null || Math.abs(lat) > 85 || Math.abs(lon) > 180 || width <= 0 || height <= 0) {
                     previewLink.classList.add('mode-hidden');
-                    showStatus('Enter a valid latitude, longitude, width, and height.');
+                    showStatus('Enter valid cemetery coordinates and photo size.');
                     return;
                 }
 
@@ -970,12 +1020,21 @@ final class App
                 const generatedUrl = `${endpoint}?${params.toString()}`;
                 sourceUrl.value = generatedUrl;
                 if (mapName.value.trim() === '' || mapName.value.trim() === 'Cemetery map') {
-                    mapName.value = 'USGS NAIP aerial image';
+                    mapName.value = 'Aerial photo';
                 }
                 previewLink.href = generatedUrl;
                 previewLink.classList.remove('mode-hidden');
-                showStatus('USGS image URL is ready. Save the map background to use it behind plot boundaries.');
+                showStatus('Aerial photo is ready. Preview it if you want, then save the map background.');
+            }
+
+            areaSize.addEventListener('change', () => {
+                syncAreaSize();
+                if (latitude.value.trim() !== '' && longitude.value.trim() !== '') {
+                    generateAerialPhoto();
+                }
             });
+            helper.querySelector('[data-usgs-action="generate"]').addEventListener('click', generateAerialPhoto);
+            syncAreaSize();
         })();
 
         (() => {
@@ -1210,6 +1269,88 @@ final class App
         </script>
         <?php
         return (string) ob_get_clean();
+    }
+
+    private function geocodeAddress(string $address): ?array
+    {
+        $params = http_build_query([
+            'address' => $address,
+            'benchmark' => 'Public_AR_Current',
+            'format' => 'json',
+        ]);
+        $data = $this->httpJson('https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?' . $params);
+        $match = $data['result']['addressMatches'][0]['coordinates'] ?? null;
+        if (!is_array($match) || !is_numeric($match['x'] ?? null) || !is_numeric($match['y'] ?? null)) {
+            return null;
+        }
+
+        return [
+            'latitude' => (float) $match['y'],
+            'longitude' => (float) $match['x'],
+        ];
+    }
+
+    private function httpJson(string $url): ?array
+    {
+        $json = false;
+        if (function_exists('curl_init')) {
+            $curl = curl_init($url);
+            if ($curl !== false) {
+                curl_setopt_array($curl, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_CONNECTTIMEOUT => 5,
+                    CURLOPT_TIMEOUT => 10,
+                    CURLOPT_USERAGENT => 'Anesti cemetery map setup',
+                ]);
+                $json = curl_exec($curl);
+                curl_close($curl);
+            }
+        }
+
+        if ($json === false) {
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 10,
+                    'header' => "User-Agent: Anesti cemetery map setup\r\n",
+                ],
+            ]);
+            $json = @file_get_contents($url, false, $context);
+        }
+
+        if (!is_string($json) || $json === '') {
+            return null;
+        }
+
+        $data = json_decode($json, true);
+        return is_array($data) ? $data : null;
+    }
+
+    private function mapAreaSize(string $areaSize): array
+    {
+        return match ($areaSize) {
+            '500,320' => [500, 320],
+            '1600,1000' => [1600, 1000],
+            default => [900, 560],
+        };
+    }
+
+    private function usgsImageUrl(float $latitude, float $longitude, int $widthFeet, int $heightFeet): string
+    {
+        $feetToMeters = 0.3048;
+        $metersPerDegree = 111320;
+        $halfHeightDegrees = ($heightFeet * $feetToMeters / $metersPerDegree) / 2;
+        $halfWidthDegrees = ($widthFeet * $feetToMeters / ($metersPerDegree * cos($latitude * pi() / 180))) / 2;
+
+        return 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage?' . http_build_query([
+            'bbox' => sprintf('%.7F,%.7F,%.7F,%.7F', $longitude - $halfWidthDegrees, $latitude - $halfHeightDegrees, $longitude + $halfWidthDegrees, $latitude + $halfHeightDegrees),
+            'bboxSR' => '4326',
+            'imageSR' => '4326',
+            'size' => '1600,1000',
+            'format' => 'jpgpng',
+            'transparent' => 'false',
+            'f' => 'image',
+        ]);
     }
 
     private function adminUsers(): string

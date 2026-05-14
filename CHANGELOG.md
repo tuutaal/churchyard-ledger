@@ -30,6 +30,7 @@ This project follows a simple changelog format while the app is early in develop
 - Added an Admin settings hub with map setup, user setup, and a plot-boundary editor for tracing plots over an uploaded cemetery map image.
 - Improved map setup so admins can import a map background, redraw existing plot geography, or create a new blank plot from a drawn polygon.
 - Added cemetery GPS coordinate fields, a USGS NAIP image URL helper, and zoom/pan controls for the admin boundary editor.
+- Simplified aerial photo setup so admins can find a USGS image from a cemetery street address, with GPS and image URL options tucked under advanced controls.
 
 ## 2026-05-12
 
