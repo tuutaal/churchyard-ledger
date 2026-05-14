@@ -342,37 +342,59 @@ final class Repository
             return false;
         }
 
-        $geometry = json_decode($geometryJson, true);
-        if (!is_array($geometry)) {
+        $geometry = $this->normalizePlotGeometry($geometryJson);
+        if ($geometry === null) {
             return false;
-        }
-
-        $points = $geometry['points'] ?? [];
-        if (!is_array($points) || count($points) < 3 || count($points) > 30) {
-            return false;
-        }
-
-        $normalized = [];
-        foreach ($points as $point) {
-            if (!is_array($point) || count($point) < 2 || !is_numeric($point[0]) || !is_numeric($point[1])) {
-                return false;
-            }
-
-            $x = max(0, min(10000, (int) round((float) $point[0])));
-            $y = max(0, min(10000, (int) round((float) $point[1])));
-            $normalized[] = [$x, $y];
         }
 
         try {
             $statement = $this->db->prepare('update plots set geometry = :geometry where id = :id');
             $statement->execute([
                 'id' => $plotId,
-                'geometry' => json_encode(['type' => 'Polygon', 'points' => $normalized]),
+                'geometry' => $geometry,
             ]);
             $this->audit('update', 'Plot', $plotId, 'Updated plot map boundary');
             return $this->plot($plotId) !== null;
         } catch (Throwable) {
             return false;
+        }
+    }
+
+    public function createPlotFromGeometry(array $data, string $geometryJson): ?string
+    {
+        if ($this->db === null || trim((string) ($data['new_identifier'] ?? '')) === '') {
+            return null;
+        }
+
+        $geometry = $this->normalizePlotGeometry($geometryJson);
+        if ($geometry === null) {
+            return null;
+        }
+
+        $id = self::id();
+        $values = [
+            'id' => $id,
+            'cemetery_id' => $this->cemeteryId(),
+            'section_id' => $this->blankToNull($data['new_section_id'] ?? null),
+            'identifier' => trim((string) $data['new_identifier']),
+            'row_label' => $this->blankToNull($data['new_row_label'] ?? null),
+            'lot' => $this->blankToNull($data['new_lot'] ?? null),
+            'status' => $this->allowed($data['new_status'] ?? '', ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification'], 'unknown'),
+            'notes' => $this->blankToNull($data['new_notes'] ?? null),
+            'visibility' => $this->allowed($data['new_visibility'] ?? '', ['private', 'public'], 'private'),
+            'confidence' => $this->allowed($data['new_confidence'] ?? '', ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+            'geometry' => $geometry,
+        ];
+
+        try {
+            $sql = 'insert into plots (id, cemetery_id, section_id, identifier, row_label, lot, status, notes, visibility, confidence, geometry)
+                values (:id, :cemetery_id, :section_id, :identifier, :row_label, :lot, :status, :notes, :visibility, :confidence, :geometry)';
+            $this->db->prepare($sql)->execute($values);
+            $this->audit('create', 'Plot', $id, 'Created plot ' . $values['identifier'] . ' from map boundary');
+
+            return $id;
+        } catch (Throwable) {
+            return null;
         }
     }
 
@@ -1371,6 +1393,32 @@ final class Repository
     private function allowedEntityType(string $entityType): string
     {
         return $this->allowed($entityType, ['person', 'plot', 'interment'], 'plot');
+    }
+
+    private function normalizePlotGeometry(string $geometryJson): ?string
+    {
+        $geometry = json_decode($geometryJson, true);
+        if (!is_array($geometry)) {
+            return null;
+        }
+
+        $points = $geometry['points'] ?? [];
+        if (!is_array($points) || count($points) < 3 || count($points) > 30) {
+            return null;
+        }
+
+        $normalized = [];
+        foreach ($points as $point) {
+            if (!is_array($point) || count($point) < 2 || !is_numeric($point[0]) || !is_numeric($point[1])) {
+                return null;
+            }
+
+            $x = max(0, min(10000, (int) round((float) $point[0])));
+            $y = max(0, min(10000, (int) round((float) $point[1])));
+            $normalized[] = [$x, $y];
+        }
+
+        return json_encode(['type' => 'Polygon', 'points' => $normalized]);
     }
 
     private function customFieldKey(string $fieldKey, string $label): string

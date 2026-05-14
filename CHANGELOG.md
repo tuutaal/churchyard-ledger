@@ -28,6 +28,7 @@ This project follows a simple changelog format while the app is early in develop
 - Removed old Next.js, Node.js, TypeScript, and Drizzle files from the active repository tree after archiving them locally.
 - Reworked the plot map into a GIS-style pan-and-zoom viewer with plot boundaries, search, filters, and a selected-plot details panel.
 - Added an Admin settings hub with map setup, user setup, and a plot-boundary editor for tracing plots over an uploaded cemetery map image.
+- Improved map setup so admins can import a map background, redraw existing plot geography, or create a new blank plot from a drawn polygon.
 
 ## 2026-05-12
 

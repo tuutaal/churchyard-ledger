@@ -769,6 +769,7 @@ final class App
     private function adminMap(): string
     {
         $message = '';
+        $createdPlotId = null;
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $action = (string) ($_POST['action'] ?? '');
             if ($action === 'map_layer') {
@@ -776,9 +777,16 @@ final class App
                     ? 'Map background saved.'
                     : 'Could not save the map background. Choose an image file or enter an image URL.';
             } elseif ($action === 'plot_geometry') {
-                $message = $this->repository->savePlotGeometry((string) ($_POST['plot_id'] ?? ''), (string) ($_POST['geometry_json'] ?? ''))
-                    ? 'Plot boundary saved.'
-                    : 'Could not save the plot boundary. Choose a plot and draw at least three points.';
+                if (($_POST['plot_geometry_mode'] ?? 'existing') === 'new') {
+                    $createdPlotId = $this->repository->createPlotFromGeometry($_POST, (string) ($_POST['geometry_json'] ?? ''));
+                    $message = $createdPlotId !== null
+                        ? 'New plot created from the map boundary.'
+                        : 'Could not create the plot. Add a plot identifier and draw at least three points.';
+                } else {
+                    $message = $this->repository->savePlotGeometry((string) ($_POST['plot_id'] ?? ''), (string) ($_POST['geometry_json'] ?? ''))
+                        ? 'Plot boundary saved.'
+                        : 'Could not save the plot boundary. Choose a plot and draw at least three points.';
+                }
             }
         }
 
@@ -792,25 +800,32 @@ final class App
         <section class="panel">
             <p class="eyebrow">Map administration</p>
             <h1>Map Setup</h1>
-            <p class="lede">Upload a scanned cemetery map, aerial image, or site plan, then trace plot boundaries so the public map behaves more like a parcel GIS viewer.</p>
-            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <p class="lede">Import a scanned cemetery map, aerial image, or site plan, then trace plot boundaries so the public map behaves more like a parcel GIS viewer.</p>
+            <?php if ($message): ?>
+                <div class="notice">
+                    <?= e($message) ?>
+                    <?php if ($createdPlotId !== null): ?>
+                        <a href="/plots/<?= e(rawurlencode($createdPlotId)) ?>/edit">Finish plot details</a>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
             <form class="form record-form" method="post" enctype="multipart/form-data">
                 <input type="hidden" name="action" value="map_layer">
                 <label>Map name <input name="name" value="<?= e($mapLayer['name'] ?? 'Cemetery map') ?>"></label>
                 <label>Image URL <input name="source_url" value="<?= e($mapLayer['source_url'] ?? '') ?>" placeholder="https://example.org/cemetery-map.jpg"></label>
-                <label class="full">Upload map image <input name="map_image" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
+                <label class="full">Import map image <input name="map_image" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
                 <?= $this->select('confidence', 'Map confidence', $mapLayer['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
                 <?= $this->select('visibility', 'Map visibility', $mapLayer['visibility'] ?? 'private', ['private', 'public']) ?>
                 <div class="actions full">
-                    <button class="button" type="submit">Save map background</button>
+                    <button class="button" type="submit">Import map background</button>
                     <a class="button secondary" href="/map">Open map</a>
                 </div>
             </form>
         </section>
         <section class="panel public-section">
             <p class="eyebrow">Boundary editor</p>
-            <h1>Draw Plot Boundaries</h1>
-            <p class="lede">Choose a plot, click around its corners on the map, then save. Existing boundaries can be redrawn the same way.</p>
+            <h1>Draw Plot Geography</h1>
+            <p class="lede">Choose an existing plot to redraw its boundary, or draw a new polygon and create a blank plot record from the map.</p>
             <div class="map-editor" data-admin-map-plots="<?= e((string) $mapJson) ?>">
                 <div class="map-editor-stage">
                     <svg class="gis-map-svg admin-map-svg" viewBox="0 0 1600 1000" role="img" aria-label="Editable cemetery plot map">
@@ -834,21 +849,44 @@ final class App
                 <form class="form map-editor-tools" method="post">
                     <input type="hidden" name="action" value="plot_geometry">
                     <input type="hidden" name="geometry_json" value="">
-                    <label class="full">Plot
-                        <select name="plot_id" required>
-                            <option value="">Choose a plot</option>
-                            <?php foreach ($mapData as $plot): ?>
-                                <option value="<?= e($plot['id']) ?>"><?= e($plot['identifier'] . ' - ' . $plot['section']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </label>
+                    <div class="full map-mode-toggle">
+                        <label class="checkbox"><input type="radio" name="plot_geometry_mode" value="existing" checked> Update existing plot</label>
+                        <label class="checkbox"><input type="radio" name="plot_geometry_mode" value="new"> Create new plot from polygon</label>
+                    </div>
+                    <div class="full map-existing-fields">
+                        <label>Plot
+                            <select name="plot_id">
+                                <option value="">Choose a plot</option>
+                                <?php foreach ($mapData as $plot): ?>
+                                    <option value="<?= e($plot['id']) ?>"><?= e($plot['identifier'] . ' - ' . $plot['section']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="full map-new-fields mode-hidden">
+                        <label>Plot identifier <input name="new_identifier" placeholder="A-12, Lot 7, Section B"></label>
+                        <label>Section
+                            <select name="new_section_id">
+                                <option value="">No section</option>
+                                <?php foreach ($this->repository->sections() as $section): ?>
+                                    <option value="<?= e($section['id']) ?>"><?= e($section['code'] . ' - ' . $section['name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                        <label>Row <input name="new_row_label"></label>
+                        <label>Lot <input name="new_lot"></label>
+                        <?= $this->select('new_status', 'Status', 'unknown', ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification']) ?>
+                        <?= $this->select('new_confidence', 'Confidence', 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
+                        <?= $this->select('new_visibility', 'Visibility', 'private', ['private', 'public']) ?>
+                        <label class="full">Notes <textarea name="new_notes" rows="3"></textarea></label>
+                    </div>
                     <div class="actions full">
                         <button class="button secondary" type="button" data-editor-action="draw">Draw boundary</button>
                         <button class="button secondary" type="button" data-editor-action="undo">Undo point</button>
                         <button class="button secondary" type="button" data-editor-action="clear">Clear draft</button>
                     </div>
                     <div class="notice full map-editor-status">Choose a plot, then use Draw boundary.</div>
-                    <button class="button full" type="submit">Save plot boundary</button>
+                    <button class="button full" type="submit">Save map geography</button>
                 </form>
             </div>
         </section>
@@ -863,6 +901,10 @@ final class App
             const select = editor.querySelector('select[name="plot_id"]');
             const geometryInput = editor.querySelector('input[name="geometry_json"]');
             const status = editor.querySelector('.map-editor-status');
+            const modeInputs = Array.from(editor.querySelectorAll('input[name="plot_geometry_mode"]'));
+            const existingFields = editor.querySelector('.map-existing-fields');
+            const newFields = editor.querySelector('.map-new-fields');
+            const newIdentifier = editor.querySelector('input[name="new_identifier"]');
             const ns = 'http://www.w3.org/2000/svg';
             let drawing = false;
             let draft = [];
@@ -883,11 +925,24 @@ final class App
                 return plots.find((plot) => plot.id === select.value) || null;
             }
 
+            function currentMode() {
+                const checked = modeInputs.find((input) => input.checked);
+                return checked ? checked.value : 'existing';
+            }
+
+            function setMode(nextMode) {
+                modeInputs.forEach((input) => {
+                    input.checked = input.value === nextMode;
+                });
+                existingFields.classList.toggle('mode-hidden', nextMode !== 'existing');
+                newFields.classList.toggle('mode-hidden', nextMode !== 'new');
+            }
+
             function render() {
                 content.innerHTML = '';
                 plots.forEach((plot) => {
                     const group = document.createElementNS(ns, 'g');
-                    group.setAttribute('class', `gis-plot status-${plot.status}${plot.id === select.value ? ' selected' : ''}`);
+                    group.setAttribute('class', `gis-plot status-${plot.status}${currentMode() === 'existing' && plot.id === select.value ? ' selected' : ''}`);
                     const polygon = document.createElementNS(ns, 'polygon');
                     polygon.setAttribute('points', pointsText(plot.points));
                     const label = document.createElementNS(ns, 'text');
@@ -898,8 +953,11 @@ final class App
                     group.appendChild(polygon);
                     group.appendChild(label);
                     group.addEventListener('click', () => {
+                        if (drawing) return;
+                        setMode('existing');
                         select.value = plot.id;
                         draft = plot.points.slice();
+                        drawing = false;
                         updateDraft();
                         render();
                     });
@@ -910,6 +968,18 @@ final class App
             function updateDraft() {
                 draftLine.setAttribute('points', pointsText(draft));
                 geometryInput.value = draft.length >= 3 ? JSON.stringify({ type: 'Polygon', points: draft }) : '';
+                if (currentMode() === 'new') {
+                    const label = newIdentifier.value.trim() || 'new plot';
+                    if (drawing) {
+                        status.textContent = `Drawing ${label}: click each corner in order. ${draft.length} point${draft.length === 1 ? '' : 's'} selected.`;
+                    } else if (draft.length >= 3) {
+                        status.textContent = `${label} boundary is ready. Add an identifier, then save map geography.`;
+                    } else {
+                        status.textContent = 'Draw a polygon, enter a plot identifier, then save to create the plot.';
+                    }
+                    return;
+                }
+
                 const plot = selectedPlot();
                 if (!plot) {
                     status.textContent = 'Choose a plot, then use Draw boundary.';
@@ -921,6 +991,10 @@ final class App
             }
 
             editor.querySelector('[data-editor-action="draw"]').addEventListener('click', () => {
+                if (currentMode() === 'existing' && !selectedPlot()) {
+                    updateDraft();
+                    return;
+                }
                 drawing = true;
                 draft = [];
                 updateDraft();
@@ -935,18 +1009,31 @@ final class App
                 updateDraft();
             });
             select.addEventListener('change', () => {
+                setMode('existing');
                 const plot = selectedPlot();
                 draft = plot ? plot.points.slice() : [];
                 drawing = false;
                 updateDraft();
                 render();
             });
+            modeInputs.forEach((input) => {
+                input.addEventListener('change', () => {
+                    setMode(input.value);
+                    draft = currentMode() === 'existing' && selectedPlot() ? selectedPlot().points.slice() : [];
+                    drawing = false;
+                    updateDraft();
+                    render();
+                });
+            });
+            newIdentifier.addEventListener('input', updateDraft);
             svg.addEventListener('click', (event) => {
-                if (!drawing || !select.value) return;
+                if (!drawing) return;
+                if (currentMode() === 'existing' && !select.value) return;
                 draft.push(mapPoint(event));
                 updateDraft();
             });
 
+            setMode(currentMode());
             render();
             updateDraft();
         })();
