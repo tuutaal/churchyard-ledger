@@ -773,9 +773,14 @@ final class App
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $action = (string) ($_POST['action'] ?? '');
             if ($action === 'map_layer') {
+                $coordinatesSaved = $this->repository->saveCemeteryCoordinates($_POST);
                 $message = $this->repository->saveMapLayer($_POST, $_FILES, $this->root)
-                    ? 'Map background saved.'
+                    ? ($coordinatesSaved ? 'Map background saved.' : 'Map background saved, but GPS coordinates were not updated.')
                     : 'Could not save the map background. Choose an image file or enter an image URL.';
+            } elseif ($action === 'cemetery_coordinates') {
+                $message = $this->repository->saveCemeteryCoordinates($_POST)
+                    ? 'GPS coordinates saved.'
+                    : 'Could not save GPS coordinates. Use decimal latitude and longitude.';
             } elseif ($action === 'plot_geometry') {
                 if (($_POST['plot_geometry_mode'] ?? 'existing') === 'new') {
                     $createdPlotId = $this->repository->createPlotFromGeometry($_POST, (string) ($_POST['geometry_json'] ?? ''));
@@ -794,6 +799,7 @@ final class App
         $mapData = $this->mapFeatures($plots);
         $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $mapLayer = $this->repository->mapLayer();
+        $cemetery = $this->repository->cemetery();
 
         ob_start();
         ?>
@@ -810,14 +816,28 @@ final class App
                 </div>
             <?php endif; ?>
             <form class="form record-form" method="post" enctype="multipart/form-data">
-                <input type="hidden" name="action" value="map_layer">
-                <label>Map name <input name="name" value="<?= e($mapLayer['name'] ?? 'Cemetery map') ?>"></label>
-                <label>Image URL <input name="source_url" value="<?= e($mapLayer['source_url'] ?? '') ?>" placeholder="https://example.org/cemetery-map.jpg"></label>
+                <label>Map name <input name="name" data-map-name value="<?= e($mapLayer['name'] ?? 'Cemetery map') ?>"></label>
+                <label>Image URL <input name="source_url" data-map-source-url value="<?= e($mapLayer['source_url'] ?? '') ?>" placeholder="https://example.org/cemetery-map.jpg"></label>
+                <div class="full usgs-image-helper">
+                    <p class="card-label">USGS NAIP image helper</p>
+                    <div class="usgs-helper-grid">
+                        <label>GPS latitude <input name="latitude" data-usgs-lat inputmode="decimal" value="<?= e($cemetery['latitude'] ?? '') ?>" placeholder="44.3900"></label>
+                        <label>GPS longitude <input name="longitude" data-usgs-lon inputmode="decimal" value="<?= e($cemetery['longitude'] ?? '') ?>" placeholder="-89.8200"></label>
+                        <label>Width in feet <input data-usgs-width inputmode="numeric" value="900"></label>
+                        <label>Height in feet <input data-usgs-height inputmode="numeric" value="560"></label>
+                    </div>
+                    <div class="actions usgs-helper-actions">
+                        <button class="button secondary" type="button" data-usgs-action="generate">Use USGS image URL</button>
+                        <a class="button secondary mode-hidden" data-usgs-preview-link href="#" target="_blank" rel="noopener">Preview image</a>
+                    </div>
+                    <div class="notice mode-hidden" data-usgs-status></div>
+                </div>
                 <label class="full">Import map image <input name="map_image" type="file" accept="image/jpeg,image/png,image/gif,image/webp"></label>
                 <?= $this->select('confidence', 'Map confidence', $mapLayer['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
                 <?= $this->select('visibility', 'Map visibility', $mapLayer['visibility'] ?? 'private', ['private', 'public']) ?>
                 <div class="actions full">
-                    <button class="button" type="submit">Import map background</button>
+                    <button class="button" name="action" value="map_layer" type="submit">Import map background</button>
+                    <button class="button secondary" name="action" value="cemetery_coordinates" type="submit">Save GPS coordinates</button>
                     <a class="button secondary" href="/map">Open map</a>
                 </div>
             </form>
@@ -828,6 +848,11 @@ final class App
             <p class="lede">Choose an existing plot to redraw its boundary, or draw a new polygon and create a blank plot record from the map.</p>
             <div class="map-editor" data-admin-map-plots="<?= e((string) $mapJson) ?>">
                 <div class="map-editor-stage">
+                    <div class="admin-map-controls" aria-label="Boundary editor map controls">
+                        <button type="button" data-editor-map-action="zoom-in" aria-label="Zoom in">+</button>
+                        <button type="button" data-editor-map-action="zoom-out" aria-label="Zoom out">−</button>
+                        <button type="button" data-editor-map-action="home" aria-label="Reset map">⌂</button>
+                    </div>
                     <svg class="gis-map-svg admin-map-svg" viewBox="0 0 1600 1000" role="img" aria-label="Editable cemetery plot map">
                         <defs>
                             <pattern id="adminMapGrass" width="80" height="80" patternUnits="userSpaceOnUse">
@@ -892,6 +917,68 @@ final class App
         </section>
         <script>
         (() => {
+            const helper = document.querySelector('.usgs-image-helper');
+            if (!helper) return;
+            const sourceUrl = document.querySelector('[data-map-source-url]');
+            const mapName = document.querySelector('[data-map-name]');
+            const latitude = helper.querySelector('[data-usgs-lat]');
+            const longitude = helper.querySelector('[data-usgs-lon]');
+            const widthFeet = helper.querySelector('[data-usgs-width]');
+            const heightFeet = helper.querySelector('[data-usgs-height]');
+            const previewLink = helper.querySelector('[data-usgs-preview-link]');
+            const status = helper.querySelector('[data-usgs-status]');
+            const endpoint = 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage';
+
+            function showStatus(message) {
+                status.textContent = message;
+                status.classList.remove('mode-hidden');
+            }
+
+            function numericValue(input) {
+                const value = Number.parseFloat(input.value);
+                return Number.isFinite(value) ? value : null;
+            }
+
+            helper.querySelector('[data-usgs-action="generate"]').addEventListener('click', () => {
+                const lat = numericValue(latitude);
+                const lon = numericValue(longitude);
+                const width = numericValue(widthFeet);
+                const height = numericValue(heightFeet);
+                if (lat === null || lon === null || width === null || height === null || Math.abs(lat) > 85 || Math.abs(lon) > 180 || width <= 0 || height <= 0) {
+                    previewLink.classList.add('mode-hidden');
+                    showStatus('Enter a valid latitude, longitude, width, and height.');
+                    return;
+                }
+
+                const feetToMeters = 0.3048;
+                const metersPerDegree = 111320;
+                const halfHeightDegrees = (height * feetToMeters / metersPerDegree) / 2;
+                const halfWidthDegrees = (width * feetToMeters / (metersPerDegree * Math.cos(lat * Math.PI / 180))) / 2;
+                const west = lon - halfWidthDegrees;
+                const south = lat - halfHeightDegrees;
+                const east = lon + halfWidthDegrees;
+                const north = lat + halfHeightDegrees;
+                const params = new URLSearchParams({
+                    bbox: `${west.toFixed(7)},${south.toFixed(7)},${east.toFixed(7)},${north.toFixed(7)}`,
+                    bboxSR: '4326',
+                    imageSR: '4326',
+                    size: '1600,1000',
+                    format: 'jpgpng',
+                    transparent: 'false',
+                    f: 'image'
+                });
+                const generatedUrl = `${endpoint}?${params.toString()}`;
+                sourceUrl.value = generatedUrl;
+                if (mapName.value.trim() === '' || mapName.value.trim() === 'Cemetery map') {
+                    mapName.value = 'USGS NAIP aerial image';
+                }
+                previewLink.href = generatedUrl;
+                previewLink.classList.remove('mode-hidden');
+                showStatus('USGS image URL is ready. Save the map background to use it behind plot boundaries.');
+            });
+        })();
+
+        (() => {
             const editor = document.querySelector('.map-editor');
             if (!editor) return;
             const plots = JSON.parse(editor.dataset.adminMapPlots || '[]');
@@ -906,14 +993,63 @@ final class App
             const newFields = editor.querySelector('.map-new-fields');
             const newIdentifier = editor.querySelector('input[name="new_identifier"]');
             const ns = 'http://www.w3.org/2000/svg';
+            let viewBox = { x: 0, y: 0, w: 1600, h: 1000 };
             let drawing = false;
             let draft = [];
+            let isPanning = false;
+            let panStart = null;
 
-            function mapPoint(event) {
+            function setViewBox() {
+                svg.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`);
+            }
+
+            function zoom(multiplier) {
+                const cx = viewBox.x + viewBox.w / 2;
+                const cy = viewBox.y + viewBox.h / 2;
+                viewBox.w = Math.max(220, Math.min(2200, viewBox.w * multiplier));
+                viewBox.h = Math.max(140, Math.min(1400, viewBox.h * multiplier));
+                viewBox.x = cx - viewBox.w / 2;
+                viewBox.y = cy - viewBox.h / 2;
+                setViewBox();
+            }
+
+            function plotExtent() {
+                if (!plots.length) return { x: 0, y: 0, w: 1600, h: 1000 };
+                const xs = [];
+                const ys = [];
+                plots.forEach((plot) => {
+                    plot.points.forEach((point) => {
+                        xs.push(point[0]);
+                        ys.push(point[1]);
+                    });
+                });
+                const minX = Math.min(...xs);
+                const maxX = Math.max(...xs);
+                const minY = Math.min(...ys);
+                const maxY = Math.max(...ys);
+                const padding = 120;
+                return {
+                    x: Math.max(0, minX - padding),
+                    y: Math.max(0, minY - padding),
+                    w: Math.max(520, maxX - minX + padding * 2),
+                    h: Math.max(320, maxY - minY + padding * 2)
+                };
+            }
+
+            function resetView() {
+                viewBox = plotExtent();
+                setViewBox();
+            }
+
+            function mappedPoint(event) {
                 const point = svg.createSVGPoint();
                 point.x = event.clientX;
                 point.y = event.clientY;
-                const mapped = point.matrixTransform(svg.getScreenCTM().inverse());
+                return point.matrixTransform(svg.getScreenCTM().inverse());
+            }
+
+            function mapPoint(event) {
+                const mapped = mappedPoint(event);
                 return [Math.round(mapped.x), Math.round(mapped.y)];
             }
 
@@ -1026,6 +1162,39 @@ final class App
                 });
             });
             newIdentifier.addEventListener('input', updateDraft);
+            editor.querySelector('[data-editor-map-action="zoom-in"]').addEventListener('click', () => zoom(0.78));
+            editor.querySelector('[data-editor-map-action="zoom-out"]').addEventListener('click', () => zoom(1.28));
+            editor.querySelector('[data-editor-map-action="home"]').addEventListener('click', resetView);
+            svg.addEventListener('wheel', (event) => {
+                event.preventDefault();
+                zoom(event.deltaY < 0 ? 0.88 : 1.14);
+            }, { passive: false });
+            svg.addEventListener('pointerdown', (event) => {
+                if (drawing || event.target.closest('.gis-plot')) return;
+                isPanning = true;
+                panStart = mappedPoint(event);
+                svg.setPointerCapture(event.pointerId);
+                svg.classList.add('dragging');
+            });
+            svg.addEventListener('pointermove', (event) => {
+                if (!isPanning || !panStart) return;
+                const current = mappedPoint(event);
+                viewBox.x += panStart.x - current.x;
+                viewBox.y += panStart.y - current.y;
+                setViewBox();
+            });
+            svg.addEventListener('pointerup', (event) => {
+                if (!isPanning) return;
+                isPanning = false;
+                panStart = null;
+                svg.releasePointerCapture(event.pointerId);
+                svg.classList.remove('dragging');
+            });
+            svg.addEventListener('pointercancel', () => {
+                isPanning = false;
+                panStart = null;
+                svg.classList.remove('dragging');
+            });
             svg.addEventListener('click', (event) => {
                 if (!drawing) return;
                 if (currentMode() === 'existing' && !select.value) return;
@@ -1034,6 +1203,7 @@ final class App
             });
 
             setMode(currentMode());
+            resetView();
             render();
             updateDraft();
         })();

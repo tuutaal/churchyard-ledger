@@ -17,6 +17,8 @@ final class Schema
         }
 
         self::addColumnIfMissing($db, 'interments', 'disposition_type', "enum('unknown','casket','cremains','other') not null default 'unknown' after person_id");
+        self::addColumnIfMissing($db, 'cemeteries', 'latitude', 'decimal(10,7) null after country');
+        self::addColumnIfMissing($db, 'cemeteries', 'longitude', 'decimal(10,7) null after latitude');
     }
 
     private static function statements(): array
@@ -61,6 +63,8 @@ final class Schema
                 state varchar(80),
                 postal_code varchar(30),
                 country varchar(2) not null default 'US',
+                latitude decimal(10,7),
+                longitude decimal(10,7),
                 public_site_enabled tinyint(1) not null default 0,
                 default_visibility enum('private','public') not null default 'private',
                 boundary_geojson json,

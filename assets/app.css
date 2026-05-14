@@ -839,11 +839,33 @@ h1 {
 }
 
 .map-editor-stage {
+  position: relative;
   min-height: 620px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #c7d3c3;
+}
+
+.admin-map-controls {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 3;
+  display: grid;
+  gap: 8px;
+}
+
+.admin-map-controls button {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(29, 43, 52, 0.22);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(29, 43, 52, 0.15);
 }
 
 .admin-map-svg {
@@ -873,6 +895,23 @@ h1 {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.usgs-image-helper {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.usgs-helper-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.usgs-helper-actions {
+  margin-top: 12px;
 }
 
 .mode-hidden {
@@ -914,6 +953,7 @@ h1 {
   .two-column,
   .metrics,
   .record-form,
+  .usgs-helper-grid,
   .map-editor {
     grid-template-columns: 1fr;
   }

@@ -29,6 +29,7 @@ This project follows a simple changelog format while the app is early in develop
 - Reworked the plot map into a GIS-style pan-and-zoom viewer with plot boundaries, search, filters, and a selected-plot details panel.
 - Added an Admin settings hub with map setup, user setup, and a plot-boundary editor for tracing plots over an uploaded cemetery map image.
 - Improved map setup so admins can import a map background, redraw existing plot geography, or create a new blank plot from a drawn polygon.
+- Added cemetery GPS coordinate fields, a USGS NAIP image URL helper, and zoom/pan controls for the admin boundary editor.
 
 ## 2026-05-12
 

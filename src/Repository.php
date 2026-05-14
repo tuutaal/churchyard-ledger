@@ -33,6 +33,40 @@ final class Repository
         }
     }
 
+    public function saveCemeteryCoordinates(array $data): bool
+    {
+        if ($this->db === null) {
+            return false;
+        }
+
+        $latitude = trim((string) ($data['latitude'] ?? ''));
+        $longitude = trim((string) ($data['longitude'] ?? ''));
+        if ($latitude === '' && $longitude === '') {
+            $values = ['latitude' => null, 'longitude' => null, 'id' => $this->cemeteryId()];
+        } elseif ($latitude === '' || $longitude === '' || !is_numeric($latitude) || !is_numeric($longitude)) {
+            return false;
+        } else {
+            $lat = (float) $latitude;
+            $lon = (float) $longitude;
+            if ($lat < -85 || $lat > 85 || $lon < -180 || $lon > 180) {
+                return false;
+            }
+            $values = [
+                'latitude' => number_format($lat, 7, '.', ''),
+                'longitude' => number_format($lon, 7, '.', ''),
+                'id' => $this->cemeteryId(),
+            ];
+        }
+
+        try {
+            $this->db->prepare('update cemeteries set latitude = :latitude, longitude = :longitude where id = :id')->execute($values);
+            $this->audit('update', 'Cemetery', (string) $values['id'], 'Updated cemetery GPS coordinates');
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
     public function counts(): array
     {
         if ($this->db === null) {
