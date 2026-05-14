@@ -348,6 +348,119 @@ h1 {
   box-shadow: 0 2px 8px rgba(29, 43, 52, 0.08);
 }
 
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 16px;
+}
+
+.map-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.plot-key {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.plot-map-section {
+  padding: 18px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.plot-grid-map {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.plot-tile {
+  display: grid;
+  min-height: 112px;
+  align-content: start;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  text-decoration: none;
+  box-shadow: 0 1px 2px rgba(29, 43, 52, 0.04);
+}
+
+.plot-tile:hover {
+  border-color: var(--primary);
+  box-shadow: 0 4px 14px rgba(29, 43, 52, 0.1);
+}
+
+.plot-id {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.plot-location,
+.plot-people {
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.plot-people {
+  font-weight: 700;
+}
+
+.plot-tile.status-available,
+.plot-key.status-available {
+  background: #edf7f1;
+  border-color: #a9cdb7;
+}
+
+.plot-tile.status-reserved,
+.plot-key.status-reserved,
+.plot-tile.status-sold,
+.plot-key.status-sold {
+  background: #fff8df;
+  border-color: #dbc77c;
+}
+
+.plot-tile.status-occupied,
+.plot-key.status-occupied {
+  background: #eef4fb;
+  border-color: #a9bfd9;
+}
+
+.plot-tile.status-needs_verification,
+.plot-key.status-needs_verification {
+  background: #fff1d8;
+  border-color: #d6a13b;
+}
+
+.plot-tile.status-unusable,
+.plot-key.status-unusable {
+  background: #f4e8ea;
+  border-color: #cf9aa2;
+}
+
+.plot-tile.status-unknown,
+.plot-key.status-unknown {
+  background: #f4f6f6;
+  border-color: var(--border);
+}
+
 .form {
   display: grid;
   max-width: 780px;
@@ -369,6 +482,16 @@ h1 {
   font-weight: 700;
 }
 
+.form label.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form label.checkbox input {
+  width: auto;
+}
+
 .form input,
 .form select,
 .form textarea {
@@ -380,6 +503,18 @@ h1 {
 
 .form textarea {
   resize: vertical;
+}
+
+.field-help {
+  color: var(--muted-text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.custom-field-group {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
 }
 
 .photo-list {

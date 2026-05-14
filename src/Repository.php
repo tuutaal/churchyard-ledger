@@ -156,6 +156,7 @@ final class Repository
                 $this->db->prepare($sql)->execute($values);
                 $this->audit('create', 'Person', $id, 'Created person record for ' . $values['legal_name']);
             }
+            $this->saveCustomFieldValues('person', $id, $data);
             return $id;
         } catch (Throwable) {
             return null;
@@ -201,6 +202,35 @@ final class Repository
             return $rows ?: ($query === '' ? SampleData::plots() : []);
         } catch (Throwable) {
             return $query === '' ? SampleData::plots() : [];
+        }
+    }
+
+    public function mapPlots(): array
+    {
+        if ($this->db === null) {
+            return array_map(fn (array $plot) => $plot + [
+                'section_name' => $plot['section_code'] ? 'Section ' . $plot['section_code'] : 'Unsectioned',
+                'interment_count' => 0,
+                'interment_names' => '',
+            ], SampleData::plots());
+        }
+
+        try {
+            return $this->db->query(
+                'select plots.id, plots.identifier, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence,
+                    sections.code as section_code, sections.name as section_name, sections.sort_order as section_sort_order,
+                    count(interments.id) as interment_count,
+                    group_concat(people.legal_name order by people.legal_name separator ", ") as interment_names
+                 from plots
+                 left join sections on sections.id = plots.section_id
+                 left join interments on interments.plot_id = plots.id
+                 left join people on people.id = interments.person_id
+                 group by plots.id, plots.identifier, plots.row_label, plots.lot, plots.status, plots.visibility, plots.confidence,
+                    sections.code, sections.name, sections.sort_order
+                 order by coalesce(sections.sort_order, 9999), sections.code, plots.identifier'
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
         }
     }
 
@@ -265,6 +295,7 @@ final class Repository
                 $this->db->prepare($sql)->execute($values);
                 $this->audit('create', 'Plot', $id, 'Created plot ' . $values['identifier']);
             }
+            $this->saveCustomFieldValues('plot', $id, $data);
             return $id;
         } catch (Throwable) {
             return null;
@@ -401,6 +432,7 @@ final class Repository
 
             $this->attachPhoto($id, $values, $data);
             $this->attachUploadedPhoto($id, $values, $files, $root);
+            $this->saveCustomFieldValues('interment', $id, $data);
             return $id;
         } catch (Throwable) {
             return null;
@@ -417,6 +449,86 @@ final class Repository
             $statement = $this->db->prepare('select title, url from media where interment_id = :interment_id and media_type = :media_type order by created_at desc');
             $statement->execute(['interment_id' => $intermentId, 'media_type' => 'image']);
             return $statement->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function customFieldDefinitions(?string $entityType = null): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            $sql = 'select id, entity_type, field_key, label, field_type, help_text, sort_order, is_required
+                from custom_field_definitions
+                where organization_id = :organization_id';
+            $params = ['organization_id' => $this->organizationId()];
+            if ($entityType !== null) {
+                $sql .= ' and entity_type = :entity_type';
+                $params['entity_type'] = $this->allowedEntityType($entityType);
+            }
+            $sql .= ' order by entity_type, sort_order, label';
+            $statement = $this->db->prepare($sql);
+            $statement->execute($params);
+            return $statement->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    public function saveCustomFieldDefinition(array $data): bool
+    {
+        if ($this->db === null || trim((string) ($data['label'] ?? '')) === '') {
+            return false;
+        }
+
+        $entityType = $this->allowedEntityType((string) ($data['entity_type'] ?? 'plot'));
+        $label = trim((string) $data['label']);
+        $fieldKey = $this->customFieldKey((string) ($data['field_key'] ?? ''), $label);
+        $fieldType = $this->allowed((string) ($data['field_type'] ?? ''), ['text', 'textarea', 'date', 'number', 'url'], 'text');
+
+        try {
+            $this->db->prepare('insert into custom_field_definitions
+                (id, organization_id, entity_type, field_key, label, field_type, help_text, sort_order, is_required)
+                values (:id, :organization_id, :entity_type, :field_key, :label, :field_type, :help_text, :sort_order, :is_required)')->execute([
+                    'id' => self::id(),
+                    'organization_id' => $this->organizationId(),
+                    'entity_type' => $entityType,
+                    'field_key' => $fieldKey,
+                    'label' => $label,
+                    'field_type' => $fieldType,
+                    'help_text' => $this->blankToNull($data['help_text'] ?? null),
+                    'sort_order' => (int) ($data['sort_order'] ?? 0),
+                    'is_required' => isset($data['is_required']) ? 1 : 0,
+                ]);
+            $this->audit('create', 'Custom Field', $fieldKey, 'Created custom ' . $entityType . ' field ' . $label);
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    public function customFieldValues(string $entityType, string $entityId): array
+    {
+        if ($this->db === null || $entityId === '') {
+            return [];
+        }
+
+        try {
+            $statement = $this->db->prepare(
+                'select custom_field_definitions.field_key, custom_field_values.value_text
+                 from custom_field_values
+                 join custom_field_definitions on custom_field_definitions.id = custom_field_values.field_definition_id
+                 where custom_field_values.entity_type = :entity_type and custom_field_values.entity_id = :entity_id'
+            );
+            $statement->execute(['entity_type' => $this->allowedEntityType($entityType), 'entity_id' => $entityId]);
+            $values = [];
+            foreach ($statement->fetchAll() as $row) {
+                $values[$row['field_key']] = $row['value_text'];
+            }
+            return $values;
         } catch (Throwable) {
             return [];
         }
@@ -656,6 +768,54 @@ final class Repository
         }
     }
 
+    private function saveCustomFieldValues(string $entityType, string $entityId, array $data): void
+    {
+        if ($this->db === null || $entityId === '') {
+            return;
+        }
+
+        $entityType = $this->allowedEntityType($entityType);
+        foreach ($this->customFieldDefinitions($entityType) as $definition) {
+            $key = (string) $definition['field_key'];
+            $value = $this->blankToNull($data['custom'][$key] ?? $data['custom_' . $key] ?? null);
+            if ($value === null) {
+                continue;
+            }
+
+            try {
+                $this->db->prepare('insert into custom_field_values
+                    (id, field_definition_id, entity_type, entity_id, value_text)
+                    values (:id, :field_definition_id, :entity_type, :entity_id, :value_text)
+                    on duplicate key update value_text = values(value_text)')->execute([
+                        'id' => self::id(),
+                        'field_definition_id' => $definition['id'],
+                        'entity_type' => $entityType,
+                        'entity_id' => $entityId,
+                        'value_text' => $value,
+                    ]);
+            } catch (Throwable) {
+            }
+        }
+    }
+
+    private function saveCustomFieldValuesFromImport(string $entityType, string $entityId, array $row): void
+    {
+        $custom = [];
+        foreach ($this->customFieldDefinitions($entityType) as $definition) {
+            $key = (string) $definition['field_key'];
+            $labelKey = $this->normalizeCsvHeader((string) $definition['label']);
+            if (isset($row[$key])) {
+                $custom[$key] = $row[$key];
+            } elseif (isset($row[$labelKey])) {
+                $custom[$key] = $row[$labelKey];
+            }
+        }
+
+        if ($custom) {
+            $this->saveCustomFieldValues($entityType, $entityId, ['custom' => $custom]);
+        }
+    }
+
     private function importPersonRow(array $row): ?string
     {
         if (trim((string) ($row['legal_name'] ?? '')) === '') {
@@ -670,7 +830,13 @@ final class Repository
         }
 
         $id = $this->blankToNull($row['id'] ?? null);
-        return $this->savePerson($id, $row) === null ? 'Could not save this person.' : null;
+        $savedId = $this->savePerson($id, $row);
+        if ($savedId === null) {
+            return 'Could not save this person.';
+        }
+
+        $this->saveCustomFieldValuesFromImport('person', $savedId, $row);
+        return null;
     }
 
     private function importPlotRow(array $row): ?string
@@ -689,7 +855,13 @@ final class Repository
         }
 
         $id = $this->blankToNull($row['id'] ?? null) ?? $this->plotIdByIdentifier((string) $row['identifier']);
-        return $this->savePlot($id, $row) === null ? 'Could not save this plot.' : null;
+        $savedId = $this->savePlot($id, $row);
+        if ($savedId === null) {
+            return 'Could not save this plot.';
+        }
+
+        $this->saveCustomFieldValuesFromImport('plot', $savedId, $row);
+        return null;
     }
 
     private function importIntermentRow(array $row): ?string
@@ -716,7 +888,13 @@ final class Repository
         $row['plot_id'] = $plotId;
         $id = $this->blankToNull($row['id'] ?? null);
 
-        return $this->saveInterment($id, $row) === null ? 'Could not save this interment.' : null;
+        $savedId = $this->saveInterment($id, $row);
+        if ($savedId === null) {
+            return 'Could not save this interment.';
+        }
+
+        $this->saveCustomFieldValuesFromImport('interment', $savedId, $row);
+        return null;
     }
 
     private function sectionIdByCode(string $code): ?string
@@ -950,6 +1128,20 @@ final class Repository
     {
         $value = (string) $value;
         return in_array($value, $allowed, true) ? $value : $fallback;
+    }
+
+    private function allowedEntityType(string $entityType): string
+    {
+        return $this->allowed($entityType, ['person', 'plot', 'interment'], 'plot');
+    }
+
+    private function customFieldKey(string $fieldKey, string $label): string
+    {
+        $key = strtolower(trim($fieldKey !== '' ? $fieldKey : $label));
+        $key = preg_replace('/[^a-z0-9]+/', '_', $key) ?? $key;
+        $key = trim($key, '_');
+
+        return $key !== '' ? substr($key, 0, 120) : 'custom_field';
     }
 
     private function escapeLike(string $value): string

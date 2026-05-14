@@ -28,6 +28,8 @@ The name points to the Christian hope confessed in the resurrection of the body 
 - Public cemetery search and map pages
 - GIS-friendly structure, starting simple
 - CSV import and export for core records
+- Cemetery-specific custom fields for local recordkeeping categories
+- Functional internal plot map grouped by cemetery section
 
 ## Initial Stack
 
@@ -50,6 +52,7 @@ The initial schema includes:
 - Plot statuses including available, reserved, occupied, sold, unknown, unusable, and needs verification
 - Confidence fields for confirmed, probable, conflicting, and unknown records
 - Public/private visibility for records and attachments
+- Custom fields for local categories on people, plots, and interments
 - Media and documents attached to cemeteries, plots, people, interments, or owners
 - GeoJSON-style JSON fields for plot and cemetery geometry
 - Map layers for uploaded image maps now and GIS layers later

@@ -17,6 +17,8 @@ This project follows a simple changelog format while the app is early in develop
 - Added public interment search on `/public`.
 - Added internal admin/editor search on `/search`.
 - Added CSV imports for people, plots, and interments on `/imports`.
+- Added custom fields for people, plots, and interments, including import-aware custom columns.
+- Added a functional plot map on `/map` grouped by section with clickable, status-colored plot tiles.
 
 ### Changed
 

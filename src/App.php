@@ -86,7 +86,7 @@ final class App
             return;
         }
 
-        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'imports', 'exports'];
+        $known = ['dashboard', 'people', 'plots', 'interments', 'search', 'map', 'tutorial', 'public', 'imports', 'exports', 'custom-fields'];
         if (!in_array($route, $known, true)) {
             http_response_code(404);
             $this->layout('Not Found', 'not-found', '<div class="panel"><h1>Page not found</h1></div>');
@@ -103,6 +103,7 @@ final class App
             'public' => $this->publicPage(),
             'imports' => $this->imports(),
             'exports' => $this->exports(),
+            'custom-fields' => $this->customFields(),
             default => $this->dashboard(),
         };
 
@@ -259,7 +260,78 @@ final class App
 
     private function map(): string
     {
-        return '<section class="panel"><p class="eyebrow">Map</p><h1>Map</h1><p class="lede">GeoJSON-style plot data is in the schema so GIS support can grow later.</p><div class="map-preview"><div class="map-block" style="left:18%;top:20%;width:120px;height:82px">Section A</div><div class="map-block" style="right:18%;top:38%;width:138px;height:96px">Section B</div></div></section>';
+        $plots = $this->repository->mapPlots();
+        $sections = [];
+        $statusCounts = [];
+        foreach ($plots as $plot) {
+            $sectionLabel = trim((string) ($plot['section_code'] ?? '')) !== ''
+                ? 'Section ' . $plot['section_code']
+                : 'Unsectioned';
+            $sections[$sectionLabel][] = $plot;
+            $status = (string) ($plot['status'] ?? 'unknown');
+            $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
+        }
+
+        $statuses = ['available', 'reserved', 'occupied', 'sold', 'needs_verification', 'unusable', 'unknown'];
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Cemetery map</p>
+            <h1>Plot Map</h1>
+            <p class="lede">A working map of cemetery plots grouped by section. Select any plot to open its record, review status, and update location details.</p>
+            <div class="map-legend">
+                <?php foreach ($statuses as $status): ?>
+                    <?php if (($statusCounts[$status] ?? 0) > 0): ?>
+                        <span><i class="plot-key status-<?= e($status) ?>"></i><?= e(pretty($status)) ?> <?= e($statusCounts[$status]) ?></span>
+                    <?php endif; ?>
+                <?php endforeach; ?>
+            </div>
+        </section>
+
+        <?php if (!$plots): ?>
+            <section class="card public-section">
+                <h2>No plots yet</h2>
+                <p class="lede">Add plots first, then the map will display them here.</p>
+                <div class="actions"><a class="button" href="/plots/new">Add plot</a></div>
+            </section>
+        <?php endif; ?>
+
+        <?php foreach ($sections as $sectionLabel => $sectionPlots): ?>
+            <section class="card public-section plot-map-section">
+                <div class="section-heading">
+                    <div>
+                        <p class="card-label"><?= e($sectionLabel) ?></p>
+                        <h2><?= e(count($sectionPlots)) ?> <?= count($sectionPlots) === 1 ? 'plot' : 'plots' ?></h2>
+                    </div>
+                    <a class="table-action" href="/plots">Open plot list</a>
+                </div>
+                <div class="plot-grid-map">
+                    <?php foreach ($sectionPlots as $plot): ?>
+                        <?php
+                        $location = array_filter([
+                            ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
+                            ($plot['lot'] ?? '') !== '' ? 'Lot ' . $plot['lot'] : '',
+                        ]);
+                        $names = trim((string) ($plot['interment_names'] ?? ''));
+                        $count = (int) ($plot['interment_count'] ?? 0);
+                        $titleParts = array_filter([
+                            $plot['identifier'] ?? '',
+                            pretty((string) ($plot['status'] ?? 'unknown')),
+                            $names,
+                        ]);
+                        ?>
+                        <a class="plot-tile status-<?= e((string) ($plot['status'] ?? 'unknown')) ?>" href="/plots/<?= e($plot['id']) ?>/edit" title="<?= e(implode(' - ', $titleParts)) ?>">
+                            <span class="plot-id"><?= e($plot['identifier']) ?></span>
+                            <span class="plot-location"><?= e($location ? implode(' / ', $location) : 'Location open') ?></span>
+                            <span class="plot-people"><?= e($names !== '' ? $names : ($count > 0 ? $count . ' interments' : 'No interments')) ?></span>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+        <?php endforeach; ?>
+        <?php
+        return (string) ob_get_clean();
     }
 
     private function tutorial(): string
@@ -406,7 +478,7 @@ final class App
         </section>
         <section class="card public-section">
             <h2>CSV Headers</h2>
-            <p class="lede">Use these headers, or download an export and edit it. Extra columns are ignored.</p>
+            <p class="lede">Use these headers, or download an export and edit it. Extra columns are ignored unless they match a configured custom field import key or label.</p>
             <div class="template-list">
                 <?php foreach ($templates as $label => $headers): ?>
                     <div>
@@ -415,6 +487,60 @@ final class App
                     </div>
                 <?php endforeach; ?>
             </div>
+        </section>
+        <?php
+        return (string) ob_get_clean();
+    }
+
+    private function customFields(): string
+    {
+        $message = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $message = $this->repository->saveCustomFieldDefinition($_POST)
+                ? 'Custom field created.'
+                : 'Could not create the custom field. Check the label and key.';
+        }
+
+        $fields = $this->repository->customFieldDefinitions();
+
+        ob_start();
+        ?>
+        <section class="panel">
+            <p class="eyebrow">Custom fields</p>
+            <h1>Custom Fields</h1>
+            <p class="lede">Add cemetery-specific fields for records that do not fit the standard forms, such as old map numbers, deed book references, or local plot categories.</p>
+            <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
+            <form class="form record-form" method="post">
+                <?= $this->select('entity_type', 'Record type', (string) ($_POST['entity_type'] ?? 'plot'), ['plot', 'person', 'interment']) ?>
+                <label>Label <input name="label" value="<?= e($_POST['label'] ?? '') ?>" placeholder="Lot, Map page, Old register number" required></label>
+                <label>Import key <input name="field_key" value="<?= e($_POST['field_key'] ?? '') ?>" placeholder="lot, map_page, old_register_number"></label>
+                <?= $this->select('field_type', 'Field type', (string) ($_POST['field_type'] ?? 'text'), ['text', 'textarea', 'date', 'number', 'url']) ?>
+                <label>Sort order <input name="sort_order" type="number" value="<?= e($_POST['sort_order'] ?? '0') ?>"></label>
+                <label class="full">Help text <input name="help_text" value="<?= e($_POST['help_text'] ?? '') ?>" placeholder="Optional note shown under the field"></label>
+                <label class="checkbox full"><input name="is_required" type="checkbox" value="1"<?= isset($_POST['is_required']) ? ' checked' : '' ?>> Required field</label>
+                <div class="actions full"><button class="button" type="submit">Add custom field</button></div>
+            </form>
+        </section>
+        <section class="card public-section">
+            <h2>Configured Fields</h2>
+            <?php if (!$fields): ?>
+                <p class="lede">No custom fields are configured yet.</p>
+            <?php else: ?>
+                <table class="table" style="margin-top:14px">
+                    <thead><tr><th>Record</th><th>Label</th><th>Import key</th><th>Type</th><th>Required</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($fields as $field): ?>
+                        <tr>
+                            <td><?= e(pretty($field['entity_type'])) ?></td>
+                            <td><strong><?= e($field['label']) ?></strong></td>
+                            <td><code><?= e($field['field_key']) ?></code></td>
+                            <td><?= e(pretty($field['field_type'])) ?></td>
+                            <td><?= ((int) $field['is_required']) === 1 ? 'Yes' : 'No' ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
         </section>
         <?php
         return (string) ob_get_clean();
@@ -556,6 +682,7 @@ final class App
                 <label>Alternate names <input name="alternate_names_text" value="<?= e($person['alternate_names_text'] ?? '') ?>" placeholder="Separate names with commas"></label>
                 <?= $this->select('confidence', 'Confidence', $person['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
                 <?= $this->select('visibility', 'Visibility', $person['visibility'] ?? 'private', ['private', 'public']) ?>
+                <?= $this->customFieldInputs('person', $id) ?>
                 <label class="full">Notes <textarea name="notes" rows="5"><?= e($person['notes'] ?? '') ?></textarea></label>
                 <div class="actions full">
                     <button class="button" type="submit">Save person</button>
@@ -609,6 +736,7 @@ final class App
                 <?= $this->select('status', 'Status', $plot['status'] ?? 'unknown', ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification']) ?>
                 <?= $this->select('confidence', 'Confidence', $plot['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
                 <?= $this->select('visibility', 'Visibility', $plot['visibility'] ?? 'private', ['private', 'public']) ?>
+                <?= $this->customFieldInputs('plot', $id) ?>
                 <label class="full">Notes <textarea name="notes" rows="5"><?= e($plot['notes'] ?? '') ?></textarea></label>
                 <div class="actions full">
                     <button class="button" type="submit">Save plot</button>
@@ -673,6 +801,7 @@ final class App
                 <label>Position in plot <input name="plot_position" value="<?= e($interment['plot_position'] ?? '') ?>" placeholder="North side, spouse side, urn area"></label>
                 <?= $this->select('confidence', 'Confidence', $interment['confidence'] ?? 'unknown', ['confirmed', 'probable', 'conflicting', 'unknown']) ?>
                 <?= $this->select('visibility', 'Visibility', $interment['visibility'] ?? 'private', ['private', 'public']) ?>
+                <?= $this->customFieldInputs('interment', $id) ?>
                 <label class="full">Marker transcription <textarea name="marker_transcription" rows="4"><?= e($interment['marker_transcription'] ?? '') ?></textarea></label>
                 <label class="full">Notes <textarea name="notes" rows="4"><?= e($interment['notes'] ?? '') ?></textarea></label>
                 <label class="full">Add grave photo URL <input name="photo_url" placeholder="https://example.org/grave-photo.jpg"></label>
@@ -705,6 +834,40 @@ final class App
             $html .= '<option value="' . e($option) . '"' . ($selected === $option ? ' selected' : '') . '>' . e(pretty($option)) . '</option>';
         }
         return $html . '</select></label>';
+    }
+
+    private function customFieldInputs(string $entityType, ?string $entityId): string
+    {
+        $definitions = $this->repository->customFieldDefinitions($entityType);
+        if (!$definitions) {
+            return '';
+        }
+
+        $values = $_SERVER['REQUEST_METHOD'] === 'POST'
+            ? (array) ($_POST['custom'] ?? [])
+            : ($entityId === null ? [] : $this->repository->customFieldValues($entityType, $entityId));
+
+        $html = '<div class="full custom-field-group"><p class="card-label">Custom fields</p></div>';
+        foreach ($definitions as $definition) {
+            $key = (string) $definition['field_key'];
+            $label = e($definition['label']);
+            $value = e($values[$key] ?? '');
+            $name = 'custom[' . e($key) . ']';
+            $required = ((int) $definition['is_required']) === 1 ? ' required' : '';
+            $help = $definition['help_text'] ? '<span class="field-help">' . e($definition['help_text']) . '</span>' : '';
+
+            if ($definition['field_type'] === 'textarea') {
+                $input = '<textarea name="' . $name . '" rows="3"' . $required . '>' . $value . '</textarea>';
+            } else {
+                $type = in_array($definition['field_type'], ['date', 'number', 'url'], true) ? $definition['field_type'] : 'text';
+                $input = '<input name="' . $name . '" type="' . e($type) . '" value="' . $value . '"' . $required . '>';
+            }
+
+            $class = $definition['field_type'] === 'textarea' ? ' class="full"' : '';
+            $html .= '<label' . $class . '>' . $label . $input . $help . '</label>';
+        }
+
+        return $html;
     }
 
     private function peopleTable(array $people): string
@@ -751,7 +914,7 @@ final class App
 
     private function layout(string $title, string $route, string $content): void
     {
-        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'imports' => 'Imports', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
+        $nav = ['dashboard' => 'Dashboard', 'people' => 'People', 'plots' => 'Plots', 'interments' => 'Interments', 'search' => 'Search', 'map' => 'Map', 'public' => 'Public Page', 'imports' => 'Imports', 'custom-fields' => 'Custom Fields', 'exports' => 'Exports', 'tutorial' => 'Tutorial', 'install' => 'Install'];
         ?>
         <!doctype html>
         <html lang="en">

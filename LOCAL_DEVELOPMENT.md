@@ -46,7 +46,9 @@ http://localhost:8080
 - Add and edit a plot.
 - Add an interment connecting a person to a plot.
 - Add a second interment to the same plot for a double burial or cremains.
+- Open `/map` and confirm plots are grouped by section and link back to plot records.
 - Upload a grave photo on an interment.
+- Add a custom plot field from `/custom-fields`, then edit a plot and fill it in.
 - Check the public page at `/public`.
 - Download CSV files from `/exports`.
 - Import a small people, plots, or interments CSV from `/imports`.

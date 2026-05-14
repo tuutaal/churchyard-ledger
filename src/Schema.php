@@ -213,6 +213,30 @@ final class Schema
                 created_at timestamp not null default current_timestamp,
                 updated_at timestamp not null default current_timestamp on update current_timestamp
             )",
+            "create table if not exists custom_field_definitions (
+                id varchar(36) primary key,
+                organization_id varchar(36) not null,
+                entity_type enum('person','plot','interment') not null,
+                field_key varchar(120) not null,
+                label varchar(255) not null,
+                field_type enum('text','textarea','date','number','url') not null default 'text',
+                help_text varchar(500),
+                sort_order int not null default 0,
+                is_required tinyint(1) not null default 0,
+                created_at timestamp not null default current_timestamp,
+                updated_at timestamp not null default current_timestamp on update current_timestamp,
+                unique key custom_fields_org_entity_key_unique (organization_id, entity_type, field_key)
+            )",
+            "create table if not exists custom_field_values (
+                id varchar(36) primary key,
+                field_definition_id varchar(36) not null,
+                entity_type enum('person','plot','interment') not null,
+                entity_id varchar(36) not null,
+                value_text text,
+                created_at timestamp not null default current_timestamp,
+                updated_at timestamp not null default current_timestamp on update current_timestamp,
+                unique key custom_field_values_field_entity_unique (field_definition_id, entity_type, entity_id)
+            )",
             "create table if not exists audit_logs (
                 id varchar(36) primary key,
                 organization_id varchar(36) not null,
