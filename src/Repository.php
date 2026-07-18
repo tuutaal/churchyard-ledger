@@ -197,6 +197,52 @@ final class Repository
         }
     }
 
+    /**
+     * Create or update a person while preserving admin-curated fields (visibility,
+     * confidence, notes, alternate names) unless explicitly present in $data. Used by
+     * CLI importers so a re-run never clobbers manual edits made through the UI.
+     */
+    public function upsertPerson(?string $id, array $data): ?string
+    {
+        if ($id !== null) {
+            $existing = $this->person($id);
+            if ($existing !== null) {
+                $data += [
+                    'visibility' => $existing['visibility'],
+                    'confidence' => $existing['confidence'],
+                    'notes' => $existing['notes'],
+                    'alternate_names_text' => $existing['alternate_names_text'] ?? null,
+                ];
+            }
+        }
+
+        return $this->savePerson($id, $data);
+    }
+
+    /**
+     * Create or update an interment while preserving admin-curated fields (visibility,
+     * confidence, notes, disposition, burial permit, plot position) unless explicitly
+     * present in $data. Used by CLI importers so a re-run never clobbers manual edits.
+     */
+    public function upsertInterment(?string $id, array $data, array $files = [], string $root = ''): ?string
+    {
+        if ($id !== null) {
+            $existing = $this->interment($id);
+            if ($existing !== null) {
+                $data += [
+                    'visibility' => $existing['visibility'],
+                    'confidence' => $existing['confidence'],
+                    'notes' => $existing['notes'],
+                    'disposition_type' => $existing['disposition_type'],
+                    'burial_permit_number' => $existing['burial_permit_number'],
+                    'plot_position' => $existing['plot_position'],
+                ];
+            }
+        }
+
+        return $this->saveInterment($id, $data, $files, $root);
+    }
+
     public function plots(string $query = ''): array
     {
         if ($this->db === null) {
@@ -432,6 +478,76 @@ final class Repository
         }
     }
 
+    /**
+     * Find-or-create a plot by identifier. On update, admin-curated fields (status,
+     * visibility, confidence, notes) are preserved unless explicitly present in $data,
+     * so re-running an importer never clobbers manual edits made through the UI.
+     */
+    public function upsertPlot(array $data): ?string
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $identifier = trim((string) ($data['identifier'] ?? ''));
+        if ($identifier === '') {
+            return null;
+        }
+
+        $existingId = $this->plotIdByIdentifier($identifier);
+        if ($existingId !== null) {
+            $existing = $this->plot($existingId);
+            if ($existing !== null) {
+                $data += [
+                    'status' => $existing['status'],
+                    'visibility' => $existing['visibility'],
+                    'confidence' => $existing['confidence'],
+                    'notes' => $existing['notes'],
+                    'section_id' => $existing['section_id'],
+                ];
+            }
+        }
+
+        return $this->savePlot($existingId, $data);
+    }
+
+    public function upsertSection(string $code, string $name = ''): ?string
+    {
+        if ($this->db === null) {
+            return null;
+        }
+
+        $code = trim($code);
+        if ($code === '') {
+            return null;
+        }
+
+        $existing = $this->sectionIdByCode($code);
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        try {
+            $id = self::id();
+            $this->db->prepare(
+                'insert into sections (id, cemetery_id, code, name, sort_order, visibility, confidence)
+                 values (:id, :cemetery_id, :code, :name, :sort_order, :visibility, :confidence)'
+            )->execute([
+                'id' => $id,
+                'cemetery_id' => $this->cemeteryId(),
+                'code' => $code,
+                'name' => $name !== '' ? $name : $code,
+                'sort_order' => 0,
+                'visibility' => 'private',
+                'confidence' => 'unknown',
+            ]);
+            $this->audit('create', 'Section', $id, 'Created section ' . $code);
+            return $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     public function savePlot(?string $id, array $data): ?string
     {
         if ($this->db === null || trim((string) ($data['identifier'] ?? '')) === '') {
@@ -635,7 +751,6 @@ final class Repository
         if (
             $this->db === null
             || trim((string) ($data['person_id'] ?? '')) === ''
-            || trim((string) ($data['plot_id'] ?? '')) === ''
         ) {
             return null;
         }
@@ -644,7 +759,7 @@ final class Repository
         $values = [
             'id' => $id,
             'cemetery_id' => $this->cemeteryId(),
-            'plot_id' => trim((string) $data['plot_id']),
+            'plot_id' => $this->blankToNull($data['plot_id'] ?? null),
             'person_id' => trim((string) $data['person_id']),
             'disposition_type' => $this->allowed($data['disposition_type'] ?? '', ['unknown', 'casket', 'cremains', 'other'], 'unknown'),
             'interment_date_text' => $this->blankToNull($data['interment_date_text'] ?? null),
@@ -786,7 +901,7 @@ final class Repository
         try {
             $where = "interments.visibility = 'public'
                     and people.visibility = 'public'
-                    and plots.visibility = 'public'";
+                    and (plots.id is null or plots.visibility = 'public')";
             $params = [];
 
             if ($query !== '') {
@@ -823,7 +938,7 @@ final class Repository
                     ) as photo_url
                  from interments
                  join people on people.id = interments.person_id
-                 join plots on plots.id = interments.plot_id
+                 left join plots on plots.id = interments.plot_id
                  where {$where}
                  order by people.family_name, people.legal_name, plots.identifier"
             );
@@ -1121,9 +1236,12 @@ final class Repository
         $plotId = $this->blankToNull($row['plot_id'] ?? null);
         if ($plotId === null && $this->blankToNull($row['plot_identifier'] ?? null) !== null) {
             $plotId = $this->plotIdByIdentifier((string) $row['plot_identifier']);
+            if ($plotId === null) {
+                return 'plot_identifier "' . $row['plot_identifier'] . '" was not found.';
+            }
         }
 
-        if ($plotId === null || $this->plot($plotId) === null) {
+        if ($plotId !== null && $this->plot($plotId) === null) {
             return 'plot_id or plot_identifier must match an existing plot.';
         }
 
@@ -1301,7 +1419,7 @@ final class Repository
 
     private function attachUploadedPhoto(string $intermentId, array $interment, array $files, string $root): void
     {
-        if ($this->db === null || $root === '' || empty($files['photo_upload']) || !is_array($files['photo_upload'])) {
+        if ($root === '' || empty($files['photo_upload']) || !is_array($files['photo_upload'])) {
             return;
         }
 
@@ -1319,21 +1437,35 @@ final class Repository
             return;
         }
 
-        $extension = strtolower(pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+        $this->attachPhotoFromPath($intermentId, $interment, $tmpName, (string) ($file['name'] ?? ''), $root, 'Uploaded grave photo');
+    }
+
+    /**
+     * Stores a grave photo from a plain filesystem path (not a PHP upload) under
+     * uploads/grave-photos/, matching the convention used by the web upload form.
+     * Used by the web upload path (via attachUploadedPhoto) and by CLI importers.
+     */
+    public function attachPhotoFromPath(string $intermentId, array $interment, string $sourcePath, string $originalName, string $root, string $title = 'Grave photo'): bool
+    {
+        if ($this->db === null || $root === '' || $sourcePath === '' || !is_file($sourcePath)) {
+            return false;
+        }
+
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
         $extensions = ['jpg' => 'jpg', 'jpeg' => 'jpg', 'png' => 'png', 'gif' => 'gif', 'webp' => 'webp'];
-        if (!isset($extensions[$extension]) || @getimagesize($tmpName) === false) {
-            return;
+        if (!isset($extensions[$extension]) || @getimagesize($sourcePath) === false) {
+            return false;
         }
 
         $directory = rtrim($root, '/\\') . '/uploads/grave-photos';
         if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
-            return;
+            return false;
         }
 
         $fileName = self::id() . '.' . $extensions[$extension];
         $target = $directory . '/' . $fileName;
-        if (!move_uploaded_file($tmpName, $target)) {
-            return;
+        if (!copy($sourcePath, $target)) {
+            return false;
         }
 
         $url = '/uploads/grave-photos/' . $fileName;
@@ -1349,7 +1481,7 @@ final class Repository
                     'plot_id' => $interment['plot_id'],
                     'person_id' => $interment['person_id'],
                     'interment_id' => $intermentId,
-                    'title' => 'Uploaded grave photo',
+                    'title' => $title,
                     'media_type' => 'image',
                     'storage_key' => 'uploads/grave-photos/' . $fileName,
                     'url' => $url,
@@ -1357,7 +1489,9 @@ final class Repository
                     'confidence' => $interment['confidence'],
                 ]);
             $this->audit('create', 'Media', $intermentId, 'Uploaded grave photo');
+            return true;
         } catch (Throwable) {
+            return false;
         }
     }
 

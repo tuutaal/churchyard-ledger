@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy this file to directory-import.config.json (gitignored) and fill in your own church's directory page URLs. Each entry under \"pages\" is an arbitrary short label (used for --input-dir fixture file names and in the flagged-row report) mapped to the page URL. \"photo_base_url\" resolves relative headstone photo links like /pics/cemetery/00001.jpg.",
+  "pages": {
+    "a-g": "https://example.org/cemetery/cemetery-data-and-photo-directory-a-g/",
+    "h-k": "https://example.org/cemetery/cemetery-data-and-photo-directory-h-k/",
+    "l-r": "https://example.org/cemetery/cemetery-data-and-photo-directory-l-r/",
+    "s-z": "https://example.org/cemetery/cemetery-data-and-photo-directory-s-z/",
+    "unknown": "https://example.org/cemetery/cemetery-data-and-photo-directory-unknown/"
+  },
+  "photo_base_url": "https://example.org"
+}

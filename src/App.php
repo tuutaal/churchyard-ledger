@@ -327,7 +327,7 @@ final class App
                         </filter>
                     </defs>
                     <?php if (!empty($mapLayer['source_url'])): ?>
-                        <image class="gis-map-image" href="<?= e($mapLayer['source_url']) ?>" x="0" y="0" width="1600" height="1000" preserveAspectRatio="xMidYMid slice"></image>
+                        <image class="gis-map-image" href="<?= e($mapLayer['source_url']) ?>" x="0" y="0" width="1600" height="1000" preserveAspectRatio="xMidYMid meet"></image>
                     <?php else: ?>
                         <rect class="gis-ground" x="0" y="0" width="1600" height="1000"></rect>
                         <path class="gis-path" d="M-40 650 C250 570 470 545 730 590 S1240 720 1680 610"></path>
@@ -903,7 +903,7 @@ final class App
                             </pattern>
                         </defs>
                         <?php if (!empty($mapLayer['source_url'])): ?>
-                            <image class="gis-map-image" href="<?= e($mapLayer['source_url']) ?>" x="0" y="0" width="1600" height="1000" preserveAspectRatio="xMidYMid slice"></image>
+                            <image class="gis-map-image" href="<?= e($mapLayer['source_url']) ?>" x="0" y="0" width="1600" height="1000" preserveAspectRatio="xMidYMid meet"></image>
                         <?php else: ?>
                             <rect class="admin-gis-ground" x="0" y="0" width="1600" height="1000"></rect>
                             <path class="gis-path" d="M-40 650 C250 570 470 545 730 590 S1240 720 1680 610"></path>
@@ -1776,8 +1776,8 @@ final class App
                     </select>
                 </label>
                 <label>Plot
-                    <select name="plot_id" required>
-                        <option value="">Choose a plot</option>
+                    <select name="plot_id">
+                        <option value="">No marker / plot not yet located</option>
                         <?php foreach ($this->repository->plotOptions() as $plot): ?>
                             <option value="<?= e($plot['id']) ?>"<?= ($interment['plot_id'] ?? '') === $plot['id'] ? ' selected' : '' ?>><?= e($plot['identifier']) ?></option>
                         <?php endforeach; ?>

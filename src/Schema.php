@@ -19,6 +19,7 @@ final class Schema
         self::addColumnIfMissing($db, 'interments', 'disposition_type', "enum('unknown','casket','cremains','other') not null default 'unknown' after person_id");
         self::addColumnIfMissing($db, 'cemeteries', 'latitude', 'decimal(10,7) null after country');
         self::addColumnIfMissing($db, 'cemeteries', 'longitude', 'decimal(10,7) null after latitude');
+        self::makeColumnNullable($db, 'interments', 'plot_id', 'varchar(36)');
     }
 
     private static function statements(): array
@@ -123,7 +124,7 @@ final class Schema
             "create table if not exists interments (
                 id varchar(36) primary key,
                 cemetery_id varchar(36) not null,
-                plot_id varchar(36) not null,
+                plot_id varchar(36),
                 person_id varchar(36) not null,
                 disposition_type enum('unknown','casket','cremains','other') not null default 'unknown',
                 interment_date_text varchar(120),
@@ -266,6 +267,22 @@ final class Schema
             $statement->execute(['table' => $table, 'column' => $column]);
             if ((int) $statement->fetchColumn() === 0) {
                 $db->exec(sprintf('alter table %s add column %s %s', $table, $column, $definition));
+            }
+        } catch (Throwable) {
+        }
+    }
+
+    private static function makeColumnNullable(PDO $db, string $table, string $column, string $type): void
+    {
+        try {
+            $statement = $db->prepare(
+                'select is_nullable from information_schema.columns
+                 where table_schema = database() and table_name = :table and column_name = :column'
+            );
+            $statement->execute(['table' => $table, 'column' => $column]);
+            $isNullable = $statement->fetchColumn();
+            if ($isNullable === 'NO') {
+                $db->exec(sprintf('alter table %s modify column %s %s null', $table, $column, $type));
             }
         } catch (Throwable) {
         }
