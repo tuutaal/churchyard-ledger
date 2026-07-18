@@ -282,7 +282,7 @@ final class App
         }
 
         $statuses = ['available', 'reserved', 'occupied', 'sold', 'needs_verification', 'unusable', 'unknown'];
-        $mapData = $this->mapFeatures($plots);
+        $mapData = $this->mapFeatures($plots, $this->repository->mapMarkers());
         $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $mapLayer = $this->repository->mapLayer();
 
@@ -492,6 +492,33 @@ final class App
                             selectPlot(plot);
                         }
                     });
+                    (plot.markers || []).forEach((marker) => {
+                        const markerGroup = document.createElementNS(ns, 'g');
+                        markerGroup.setAttribute('class', 'gis-grave-marker');
+                        markerGroup.setAttribute('tabindex', '0');
+                        markerGroup.setAttribute('role', 'link');
+                        markerGroup.setAttribute('aria-label', marker.name);
+                        const dot = document.createElementNS(ns, 'circle');
+                        dot.setAttribute('cx', marker.x);
+                        dot.setAttribute('cy', marker.y);
+                        dot.setAttribute('r', 3.5);
+                        const title = document.createElementNS(ns, 'title');
+                        title.textContent = marker.name;
+                        markerGroup.appendChild(dot);
+                        markerGroup.appendChild(title);
+                        const goToInterment = (event) => {
+                            event.stopPropagation();
+                            window.location.href = `/interments/${encodeURIComponent(marker.id)}/edit`;
+                        };
+                        markerGroup.addEventListener('click', goToInterment);
+                        markerGroup.addEventListener('keydown', (event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                goToInterment(event);
+                            }
+                        });
+                        group.appendChild(markerGroup);
+                    });
                     content.appendChild(group);
                 });
             }
@@ -534,7 +561,7 @@ final class App
         return (string) ob_get_clean();
     }
 
-    private function mapFeatures(array $plots): array
+    private function mapFeatures(array $plots, array $markersByPlot = []): array
     {
         $sections = [];
         foreach ($plots as $plot) {
@@ -548,24 +575,28 @@ final class App
             $baseX = 140 + ($sectionIndex % 2) * 720;
             $baseY = 140 + intdiv($sectionIndex, 2) * 360;
             $sectionIndex++;
+
+            $sectionFeatures = [];
+            $sectionMinX = null;
+            $sectionMinY = null;
             foreach (array_values($sectionPlots) as $index => $plot) {
                 $points = $this->plotPoints($plot, $index, $baseX, $baseY);
                 $xs = array_column($points, 0);
                 $ys = array_column($points, 1);
                 $labelX = min($xs) + 8;
                 $labelY = min($ys) + 22;
+                $sectionMinX = $sectionMinX === null ? min($xs) : min($sectionMinX, min($xs));
+                $sectionMinY = $sectionMinY === null ? min($ys) : min($sectionMinY, min($ys));
                 $names = trim((string) ($plot['interment_names'] ?? ''));
                 $location = array_filter([
                     ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
                     ($plot['lot'] ?? '') !== '' ? 'Lot ' . $plot['lot'] : '',
                 ]);
                 $status = (string) ($plot['status'] ?? 'unknown');
-                $features[] = [
+                $sectionFeatures[] = [
                     'id' => (string) $plot['id'],
                     'identifier' => (string) $plot['identifier'],
                     'section' => $section,
-                    'sectionLabelX' => $baseX,
-                    'sectionLabelY' => $baseY - 24,
                     'row' => (string) ($plot['row_label'] ?? ''),
                     'lot' => (string) ($plot['lot'] ?? ''),
                     'location' => $location ? implode(' / ', $location) : '',
@@ -577,7 +608,16 @@ final class App
                     'labelX' => $labelX,
                     'labelY' => $labelY,
                     'points' => $points,
+                    'markers' => $markersByPlot[(string) $plot['id']] ?? [],
                 ];
+            }
+
+            $sectionLabelX = $sectionMinX ?? $baseX;
+            $sectionLabelY = ($sectionMinY ?? $baseY + 24) - 24;
+            foreach ($sectionFeatures as $feature) {
+                $feature['sectionLabelX'] = $sectionLabelX;
+                $feature['sectionLabelY'] = $sectionLabelY;
+                $features[] = $feature;
             }
         }
 
@@ -817,7 +857,7 @@ final class App
         }
 
         $plots = $this->repository->mapPlots();
-        $mapData = $this->mapFeatures($plots);
+        $mapData = $this->mapFeatures($plots, $this->repository->mapMarkers());
         $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $mapLayer = $this->repository->mapLayer();
         $cemetery = $this->repository->cemetery();
@@ -1147,6 +1187,17 @@ final class App
                     label.textContent = plot.identifier;
                     group.appendChild(polygon);
                     group.appendChild(label);
+                    (plot.markers || []).forEach((marker) => {
+                        const dot = document.createElementNS(ns, 'circle');
+                        dot.setAttribute('class', 'gis-grave-marker-dot');
+                        dot.setAttribute('cx', marker.x);
+                        dot.setAttribute('cy', marker.y);
+                        dot.setAttribute('r', 3.5);
+                        const title = document.createElementNS(ns, 'title');
+                        title.textContent = marker.name;
+                        dot.appendChild(title);
+                        group.appendChild(dot);
+                    });
                     group.addEventListener('click', () => {
                         if (drawing) return;
                         setMode('existing');

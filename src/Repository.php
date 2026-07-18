@@ -314,6 +314,45 @@ final class Repository
         }
     }
 
+    /**
+     * Individual grave marker points captured from the hand-drawn cemetery
+     * block map, grouped by plot. See scripts/apply_cemetery_map_geometry.php.
+     */
+    public function mapMarkers(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+
+        try {
+            $rows = $this->db->query(
+                'select interments.id as interment_id, interments.plot_id, interments.map_point,
+                    people.legal_name
+                 from interments
+                 join people on people.id = interments.person_id
+                 where interments.map_point is not null and interments.plot_id is not null'
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+
+        $byPlot = [];
+        foreach ($rows as $row) {
+            $point = json_decode((string) $row['map_point'], true);
+            if (!is_array($point) || !isset($point['x'], $point['y'])) {
+                continue;
+            }
+            $byPlot[$row['plot_id']][] = [
+                'id' => (string) $row['interment_id'],
+                'name' => (string) $row['legal_name'],
+                'x' => (int) $point['x'],
+                'y' => (int) $point['y'],
+            ];
+        }
+
+        return $byPlot;
+    }
+
     public function plot(string $id): ?array
     {
         if ($this->db === null) {
@@ -435,6 +474,24 @@ final class Repository
             ]);
             $this->audit('update', 'Plot', $plotId, 'Updated plot map boundary');
             return $this->plot($plotId) !== null;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    public function saveIntermentMapPoint(string $intermentId, int $x, int $y): bool
+    {
+        if ($this->db === null || $intermentId === '') {
+            return false;
+        }
+
+        try {
+            $statement = $this->db->prepare('update interments set map_point = :map_point where id = :id');
+            $statement->execute([
+                'id' => $intermentId,
+                'map_point' => json_encode(['x' => $x, 'y' => $y]),
+            ]);
+            return $statement->rowCount() > 0 || $this->interment($intermentId) !== null;
         } catch (Throwable) {
             return false;
         }

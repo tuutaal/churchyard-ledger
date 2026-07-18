@@ -4,6 +4,8 @@
 local-archives/
 uploads/grave-photos/*
 !uploads/grave-photos/.gitkeep
+uploads/maps/*
+!uploads/maps/.gitkeep
 scripts/state/*
 !scripts/state/.gitkeep
 scripts/directory-import.config.json

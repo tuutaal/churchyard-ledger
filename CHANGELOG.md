@@ -11,14 +11,20 @@ This project follows a simple changelog format while the app is early in develop
 ### Added
 
 - Added `scripts/import_public_directory.php`, a re-runnable CLI importer that pulls the public cemetery directory (5 WordPress pages) into people/plots/interments/media. Normalizes both Location formats (`Sec/Row/Blk` and `Sec/Lot`), treats "No Marker"/blank as an unlinked interment, groups multiple people sharing a location into one plot, and downloads headstone photos into `uploads/grave-photos/` using the existing convention. Idempotent: re-running matches existing records via a local state file (`scripts/state/`, gitignored) and updates them in place instead of duplicating, while preserving admin-edited fields (visibility, confidence, notes, status, disposition). Rows that fail to parse cleanly are written to a report instead of guessed. Added `scripts/.htaccess` to deny web access to the script and its state directory.
-- Added a "Block" custom plot field, auto-created by the importer, to carry the hand-drawn map's block number alongside the existing row/lot fields.
+- Added a "Block" custom plot field, auto-created by the importer, to carry a hand-drawn map's block number alongside the existing row/lot fields.
+- Added per-interment map pinning: an interment can carry a `map_point` (x/y in the map's coordinate space) and is drawn as a clickable grave marker on both the public `/map` and the admin boundary editor, so individual graves can be located within a plot's boundary. Added `Repository::saveIntermentMapPoint()` to set a point and `Repository::mapMarkers()` to fetch them for rendering. (Install-specific map data — the traced grid, transcribed names, and generated SVGs for a particular cemetery — is kept out of the app tree in a gitignored working area, not committed here.)
 
 ### Changed
 
 - `interments.plot_id` is now nullable (guarded migration), so a person with no physical marker can still have an interment record for their notes/photo without a plot link. `Repository::saveInterment()`/`importIntermentRow()` and the interment edit form no longer require a plot. `publicInterments()` now left-joins plots so these records can still appear in public search.
 - Added `Repository::upsertPlot()`, `upsertPerson()`, `upsertInterment()`, and `upsertSection()` as find-or-create helpers that preserve admin-curated fields on update, for use by CLI importers.
 - Added `Repository::attachPhotoFromPath()`, refactored out of the existing upload handler, so both the web upload form and CLI importers store grave photos the same way.
+- Section labels on the plot map now position from each section's actual rendered geometry instead of a fixed per-section grid slot, so sections stay correctly labeled when image-aligned plot geometry is mixed with auto-laid-out plots.
 - Fixed the admin map-boundary editor and the internal `/map` viewer to render the uploaded background image with `preserveAspectRatio="xMidYMid meet"` instead of `slice`, so the full image is shown without cropping — needed for pixel-accurate tracing/grid generation against a scanned map.
+
+### Schema
+
+- Added `interments.map_point` (nullable JSON) for per-interment marker coordinates.
 
 ## 2026-05-13
 

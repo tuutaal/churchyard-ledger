@@ -547,6 +547,31 @@ h1 {
   filter: url("#labelShadow");
 }
 
+.gis-grave-marker {
+  cursor: pointer;
+}
+
+.gis-grave-marker circle {
+  fill: #2a6f4d;
+  stroke: #ffffff;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.gis-grave-marker:hover circle,
+.gis-grave-marker:focus circle {
+  fill: #ff6d1f;
+  r: 5;
+}
+
+.gis-grave-marker-dot {
+  fill: #2a6f4d;
+  stroke: #ffffff;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 .gis-attribution {
   position: absolute;
   right: 14px;

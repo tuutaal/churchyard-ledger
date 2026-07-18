@@ -20,6 +20,7 @@ final class Schema
         self::addColumnIfMissing($db, 'cemeteries', 'latitude', 'decimal(10,7) null after country');
         self::addColumnIfMissing($db, 'cemeteries', 'longitude', 'decimal(10,7) null after latitude');
         self::makeColumnNullable($db, 'interments', 'plot_id', 'varchar(36)');
+        self::addColumnIfMissing($db, 'interments', 'map_point', 'json null after plot_position');
     }
 
     private static function statements(): array
