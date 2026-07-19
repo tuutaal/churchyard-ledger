@@ -21,6 +21,7 @@ final class Schema
         self::addColumnIfMissing($db, 'cemeteries', 'longitude', 'decimal(10,7) null after latitude');
         self::makeColumnNullable($db, 'interments', 'plot_id', 'varchar(36)');
         self::addColumnIfMissing($db, 'interments', 'map_point', 'json null after plot_position');
+        self::addColumnIfMissing($db, 'interments', 'grave_id', 'varchar(36) null after plot_id');
     }
 
     private static function statements(): array
@@ -242,6 +243,36 @@ final class Schema
                 created_at timestamp not null default current_timestamp,
                 updated_at timestamp not null default current_timestamp on update current_timestamp,
                 unique key custom_field_values_field_entity_unique (field_definition_id, entity_type, entity_id)
+            )",
+            "create table if not exists plot_identifiers (
+                id varchar(36) primary key,
+                cemetery_id varchar(36) not null,
+                plot_id varchar(36) not null,
+                scheme varchar(80) not null,
+                value varchar(191) not null,
+                is_primary tinyint(1) not null default 0,
+                sort_order int not null default 0,
+                created_at timestamp not null default current_timestamp,
+                updated_at timestamp not null default current_timestamp on update current_timestamp,
+                unique key plot_identifiers_scheme_value_unique (cemetery_id, scheme, value),
+                key plot_identifiers_plot (plot_id)
+            )",
+            "create table if not exists graves (
+                id varchar(36) primary key,
+                cemetery_id varchar(36) not null,
+                plot_id varchar(36) not null,
+                label varchar(40) not null,
+                status enum('available','reserved','occupied','sold','unknown','unusable','needs_verification') not null default 'unknown',
+                position varchar(120),
+                geometry json,
+                map_point json,
+                notes text,
+                visibility enum('private','public') not null default 'private',
+                confidence enum('confirmed','probable','conflicting','unknown') not null default 'unknown',
+                created_at timestamp not null default current_timestamp,
+                updated_at timestamp not null default current_timestamp on update current_timestamp,
+                unique key graves_plot_label_unique (plot_id, label),
+                key graves_cemetery (cemetery_id)
             )",
             "create table if not exists audit_logs (
                 id varchar(36) primary key,

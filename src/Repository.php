@@ -353,6 +353,226 @@ final class Repository
         return $byPlot;
     }
 
+    // --- Flexible plot identifiers -------------------------------------------
+    // A plot can carry several identifiers from different labelling schemes
+    // (e.g. a sequential "plot" number, a "block_row" label, a "lot" label).
+    // One is flagged primary; the rest are secondary aliases. Church cemeteries
+    // routinely mix numbering systems, so records need to be findable by any.
+
+    /** @return array<int,array{id:string,scheme:string,value:string,is_primary:int,sort_order:int}> */
+    public function plotIdentifiers(string $plotId): array
+    {
+        if ($this->db === null || $plotId === '') {
+            return [];
+        }
+        try {
+            $statement = $this->db->prepare(
+                'select id, scheme, value, is_primary, sort_order from plot_identifiers
+                 where plot_id = :plot_id order by is_primary desc, sort_order, scheme'
+            );
+            $statement->execute(['plot_id' => $plotId]);
+            return $statement->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /** Find the plot id whose identifier in any scheme equals $value. */
+    public function plotIdByLabel(string $value, ?string $scheme = null): ?string
+    {
+        if ($this->db === null || trim($value) === '') {
+            return null;
+        }
+        try {
+            $sql = 'select plot_id from plot_identifiers where cemetery_id = :cemetery_id and value = :value';
+            $params = ['cemetery_id' => $this->cemeteryId(), 'value' => trim($value)];
+            if ($scheme !== null) {
+                $sql .= ' and scheme = :scheme';
+                $params['scheme'] = $scheme;
+            }
+            $statement = $this->db->prepare($sql . ' limit 1');
+            $statement->execute($params);
+            $id = $statement->fetchColumn();
+            return $id === false ? null : (string) $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Create or update one identifier for a plot. One value is kept per
+     * (plot, scheme). Setting primary clears any other primary on that plot.
+     */
+    public function setPlotIdentifier(string $plotId, string $scheme, string $value, bool $isPrimary = false, int $sortOrder = 0): ?string
+    {
+        if ($this->db === null || $plotId === '' || trim($scheme) === '' || trim($value) === '') {
+            return null;
+        }
+        $scheme = trim($scheme);
+        $value = trim($value);
+        try {
+            if ($isPrimary) {
+                $this->db->prepare('update plot_identifiers set is_primary = 0 where plot_id = :plot_id')
+                    ->execute(['plot_id' => $plotId]);
+            }
+            $statement = $this->db->prepare('select id from plot_identifiers where plot_id = :plot_id and scheme = :scheme limit 1');
+            $statement->execute(['plot_id' => $plotId, 'scheme' => $scheme]);
+            $existingId = $statement->fetchColumn();
+            if ($existingId !== false) {
+                $this->db->prepare('update plot_identifiers set value = :value, is_primary = :is_primary, sort_order = :sort_order where id = :id')
+                    ->execute(['value' => $value, 'is_primary' => $isPrimary ? 1 : 0, 'sort_order' => $sortOrder, 'id' => $existingId]);
+                return (string) $existingId;
+            }
+            $id = self::id();
+            $this->db->prepare(
+                'insert into plot_identifiers (id, cemetery_id, plot_id, scheme, value, is_primary, sort_order)
+                 values (:id, :cemetery_id, :plot_id, :scheme, :value, :is_primary, :sort_order)'
+            )->execute([
+                'id' => $id,
+                'cemetery_id' => $this->cemeteryId(),
+                'plot_id' => $plotId,
+                'scheme' => $scheme,
+                'value' => $value,
+                'is_primary' => $isPrimary ? 1 : 0,
+                'sort_order' => $sortOrder,
+            ]);
+            return $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    // --- Graves (individual burial spaces within a plot) ---------------------
+    // A plot (a family lot) contains one or more graves - e.g. plot "134" holds
+    // graves "134a", "134b", plus space for cremation urns. A grave is the unit
+    // that gets sold and interred into; interments attach to a grave.
+
+    public function grave(string $id): ?array
+    {
+        if ($this->db === null || $id === '') {
+            return null;
+        }
+        try {
+            $statement = $this->db->prepare('select * from graves where id = :id limit 1');
+            $statement->execute(['id' => $id]);
+            return $statement->fetch() ?: null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /** Graves in a plot, each with its current occupant (if any). */
+    public function graves(string $plotId): array
+    {
+        if ($this->db === null || $plotId === '') {
+            return [];
+        }
+        try {
+            $statement = $this->db->prepare(
+                'select graves.id, graves.label, graves.status, graves.position, graves.map_point,
+                        graves.visibility, graves.confidence, graves.notes,
+                        interments.id as interment_id, people.legal_name as occupant_name
+                 from graves
+                 left join interments on interments.grave_id = graves.id
+                 left join people on people.id = interments.person_id
+                 where graves.plot_id = :plot_id
+                 order by graves.label'
+            );
+            $statement->execute(['plot_id' => $plotId]);
+            return $statement->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    /**
+     * Find-or-create a grave by (plot, label). Admin-curated fields are
+     * preserved on update unless explicitly supplied, so importers can re-run.
+     */
+    public function upsertGrave(string $plotId, string $label, array $data = []): ?string
+    {
+        if ($this->db === null || $plotId === '' || trim($label) === '') {
+            return null;
+        }
+        $label = trim($label);
+        try {
+            $statement = $this->db->prepare('select id from graves where plot_id = :plot_id and label = :label limit 1');
+            $statement->execute(['plot_id' => $plotId, 'label' => $label]);
+            $existingId = $statement->fetchColumn();
+
+            if ($existingId !== false) {
+                $existing = $this->grave((string) $existingId) ?? [];
+                $data += [
+                    'status' => $existing['status'] ?? 'unknown',
+                    'position' => $existing['position'] ?? null,
+                    'notes' => $existing['notes'] ?? null,
+                    'visibility' => $existing['visibility'] ?? 'private',
+                    'confidence' => $existing['confidence'] ?? 'unknown',
+                ];
+                $this->db->prepare(
+                    'update graves set status = :status, position = :position, notes = :notes,
+                        visibility = :visibility, confidence = :confidence where id = :id'
+                )->execute([
+                    'status' => $this->allowed((string) $data['status'], ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification'], 'unknown'),
+                    'position' => $this->blankToNull($data['position']),
+                    'notes' => $this->blankToNull($data['notes']),
+                    'visibility' => $this->allowed((string) $data['visibility'], ['private', 'public'], 'private'),
+                    'confidence' => $this->allowed((string) $data['confidence'], ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+                    'id' => $existingId,
+                ]);
+                return (string) $existingId;
+            }
+
+            $id = self::id();
+            $this->db->prepare(
+                'insert into graves (id, cemetery_id, plot_id, label, status, position, notes, visibility, confidence)
+                 values (:id, :cemetery_id, :plot_id, :label, :status, :position, :notes, :visibility, :confidence)'
+            )->execute([
+                'id' => $id,
+                'cemetery_id' => $this->cemeteryId(),
+                'plot_id' => $plotId,
+                'label' => $label,
+                'status' => $this->allowed((string) ($data['status'] ?? ''), ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification'], 'unknown'),
+                'position' => $this->blankToNull($data['position'] ?? null),
+                'notes' => $this->blankToNull($data['notes'] ?? null),
+                'visibility' => $this->allowed((string) ($data['visibility'] ?? ''), ['private', 'public'], 'private'),
+                'confidence' => $this->allowed((string) ($data['confidence'] ?? ''), ['confirmed', 'probable', 'conflicting', 'unknown'], 'unknown'),
+            ]);
+            $this->audit('create', 'Grave', $id, 'Created grave ' . $label);
+            return $id;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public function saveGraveMapPoint(string $graveId, int $x, int $y): bool
+    {
+        if ($this->db === null || $graveId === '') {
+            return false;
+        }
+        try {
+            $this->db->prepare('update graves set map_point = :map_point where id = :id')
+                ->execute(['map_point' => json_encode(['x' => $x, 'y' => $y]), 'id' => $graveId]);
+            return $this->grave($graveId) !== null;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    public function linkIntermentToGrave(string $intermentId, ?string $graveId): bool
+    {
+        if ($this->db === null || $intermentId === '') {
+            return false;
+        }
+        try {
+            $this->db->prepare('update interments set grave_id = :grave_id where id = :id')
+                ->execute(['grave_id' => $graveId, 'id' => $intermentId]);
+            return true;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
     public function plot(string $id): ?array
     {
         if ($this->db === null) {
