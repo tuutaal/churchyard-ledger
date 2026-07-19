@@ -558,6 +558,15 @@ h1 {
   vector-effect: non-scaling-stroke;
 }
 
+.gis-grave-marker.empty circle {
+  fill: #ffffff;
+  stroke: #9aa8a0;
+}
+
+.gis-grave-marker.empty {
+  cursor: default;
+}
+
 .gis-grave-marker:hover circle,
 .gis-grave-marker:focus circle {
   fill: #ff6d1f;

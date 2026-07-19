@@ -282,7 +282,7 @@ final class App
         }
 
         $statuses = ['available', 'reserved', 'occupied', 'sold', 'needs_verification', 'unusable', 'unknown'];
-        $mapData = $this->mapFeatures($plots, $this->repository->mapMarkers());
+        $mapData = $this->mapFeatures($plots, $this->repository->mapGraves());
         $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $mapLayer = $this->repository->mapLayer();
 
@@ -423,6 +423,28 @@ final class App
                 return plot.points.map((point) => `${point[0]},${point[1]}`).join(' ');
             }
 
+            // Evenly distribute n grave dots inside a plot's bounding box.
+            function graveSlots(points, n) {
+                const xs = points.map((p) => p[0]);
+                const ys = points.map((p) => p[1]);
+                const x0 = Math.min(...xs);
+                const y0 = Math.min(...ys);
+                const w = Math.max(...xs) - x0;
+                const h = Math.max(...ys) - y0;
+                const cols = Math.max(1, Math.ceil(Math.sqrt(n * (w / Math.max(h, 1)))));
+                const rows = Math.max(1, Math.ceil(n / cols));
+                const slots = [];
+                for (let i = 0; i < n; i++) {
+                    const c = i % cols;
+                    const r = Math.floor(i / cols);
+                    slots.push([
+                        x0 + w * (c + 0.5) / cols,
+                        y0 + h * (r + 0.5) / rows,
+                    ]);
+                }
+                return slots;
+            }
+
             function plotMatches(plot, term, enabled) {
                 if (!enabled.has(plot.status)) return false;
                 if (!term) return true;
@@ -497,11 +519,14 @@ final class App
                     if (!a.enabled || !isFinite(a.minX)) return;
                     const frame = document.createElementNS(ns, 'rect');
                     frame.setAttribute('class', 'gis-area-frame');
-                    frame.setAttribute('x', a.minX - 12); frame.setAttribute('y', a.minY - 26);
-                    frame.setAttribute('width', (a.maxX - a.minX) + 24); frame.setAttribute('height', (a.maxY - a.minY) + 38);
+                    frame.setAttribute('x', a.minX - 10); frame.setAttribute('y', a.minY - 10);
+                    frame.setAttribute('width', (a.maxX - a.minX) + 20); frame.setAttribute('height', (a.maxY - a.minY) + 34);
                     content.appendChild(frame);
+                    // Label at the south (bottom) end, clear of the top toolbar.
                     const label = document.createElementNS(ns, 'text');
-                    label.setAttribute('x', a.minX - 8); label.setAttribute('y', a.minY - 30);
+                    label.setAttribute('x', (a.minX + a.maxX) / 2);
+                    label.setAttribute('y', a.maxY + 22);
+                    label.setAttribute('text-anchor', 'middle');
                     label.setAttribute('class', 'gis-section-label');
                     label.textContent = a.code;
                     content.appendChild(label);
@@ -533,33 +558,33 @@ final class App
                             selectPlot(plot);
                         }
                     });
-                    (plot.markers || []).forEach((marker) => {
-                        const markerGroup = document.createElementNS(ns, 'g');
-                        markerGroup.setAttribute('class', 'gis-grave-marker');
-                        markerGroup.setAttribute('tabindex', '0');
-                        markerGroup.setAttribute('role', 'link');
-                        markerGroup.setAttribute('aria-label', marker.name);
-                        const dot = document.createElementNS(ns, 'circle');
-                        dot.setAttribute('cx', marker.x);
-                        dot.setAttribute('cy', marker.y);
-                        dot.setAttribute('r', 3.5);
-                        const title = document.createElementNS(ns, 'title');
-                        title.textContent = marker.name;
-                        markerGroup.appendChild(dot);
-                        markerGroup.appendChild(title);
-                        const goToInterment = (event) => {
-                            event.stopPropagation();
-                            window.location.href = `/interments/${encodeURIComponent(marker.id)}/edit`;
-                        };
-                        markerGroup.addEventListener('click', goToInterment);
-                        markerGroup.addEventListener('keydown', (event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                goToInterment(event);
+                    // Graves as dots distributed inside the plot (only when zoomed
+                    // in enough to see them). Occupied graves link to the person.
+                    const graves = plot.graves || [];
+                    if (showLabels && graves.length) {
+                        graveSlots(plot.points, graves.length).forEach((slot, gi) => {
+                            const grave = graves[gi];
+                            const gg = document.createElementNS(ns, 'g');
+                            gg.setAttribute('class', `gis-grave-marker${grave.interment_id ? '' : ' empty'}`);
+                            gg.setAttribute('tabindex', '0');
+                            gg.setAttribute('role', grave.interment_id ? 'link' : 'img');
+                            gg.setAttribute('aria-label', grave.name || ('Grave ' + grave.label + ' (empty)'));
+                            const dot = document.createElementNS(ns, 'circle');
+                            dot.setAttribute('cx', slot[0]);
+                            dot.setAttribute('cy', slot[1]);
+                            dot.setAttribute('r', 2.6);
+                            const title = document.createElementNS(ns, 'title');
+                            title.textContent = grave.name ? `${grave.label} — ${grave.name}` : `${grave.label} (empty)`;
+                            gg.appendChild(dot);
+                            gg.appendChild(title);
+                            if (grave.interment_id) {
+                                const go = (event) => { event.stopPropagation(); window.location.href = `/interments/${encodeURIComponent(grave.interment_id)}/edit`; };
+                                gg.addEventListener('click', go);
+                                gg.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); go(event); } });
                             }
+                            group.appendChild(gg);
                         });
-                        group.appendChild(markerGroup);
-                    });
+                    }
                     content.appendChild(group);
                 });
             }
@@ -610,7 +635,7 @@ final class App
      * replaces without changing any records. Plots without world geometry fall
      * back to the older per-section auto-layout so nothing disappears.
      */
-    private function mapFeatures(array $plots, array $markersByPlot = []): array
+    private function mapFeatures(array $plots, array $gravesByPlot = []): array
     {
         $viewW = 1600;
         $viewH = 1000;
@@ -695,7 +720,7 @@ final class App
                 'labelX' => min($xs) + 4,
                 'labelY' => min($ys) + 14,
                 'points' => $points,
-                'markers' => $markersByPlot[$id] ?? [],
+                'graves' => $gravesByPlot[$id] ?? [],
             ];
 
             $sectionMin[$section] ??= [min($xs), min($ys)];
@@ -943,7 +968,7 @@ final class App
         }
 
         $plots = $this->repository->mapPlots();
-        $mapData = $this->mapFeatures($plots, $this->repository->mapMarkers());
+        $mapData = $this->mapFeatures($plots, []);
         $mapJson = json_encode($mapData, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         $mapLayer = $this->repository->mapLayer();
         $cemetery = $this->repository->cemetery();

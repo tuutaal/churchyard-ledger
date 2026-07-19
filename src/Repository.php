@@ -353,6 +353,44 @@ final class Repository
         return $byPlot;
     }
 
+    /**
+     * All graves grouped by plot, each with its occupant (if any), for the map.
+     * The renderer distributes them inside the plot's boundary, so no stored
+     * per-grave coordinates are required.
+     *
+     * @return array<string,array<int,array{id:string,label:string,name:string,interment_id:?string,status:string}>>
+     */
+    public function mapGraves(): array
+    {
+        if ($this->db === null) {
+            return [];
+        }
+        try {
+            $rows = $this->db->query(
+                'select graves.id, graves.plot_id, graves.label, graves.status,
+                        interments.id as interment_id, people.legal_name
+                 from graves
+                 left join interments on interments.grave_id = graves.id
+                 left join people on people.id = interments.person_id
+                 order by graves.plot_id, graves.label'
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+
+        $byPlot = [];
+        foreach ($rows as $row) {
+            $byPlot[(string) $row['plot_id']][] = [
+                'id' => (string) $row['id'],
+                'label' => (string) $row['label'],
+                'name' => trim((string) ($row['legal_name'] ?? '')),
+                'interment_id' => $row['interment_id'] ? (string) $row['interment_id'] : null,
+                'status' => (string) $row['status'],
+            ];
+        }
+        return $byPlot;
+    }
+
     // --- Flexible plot identifiers -------------------------------------------
     // A plot can carry several identifiers from different labelling schemes
     // (e.g. a sequential "plot" number, a "block_row" label, a "lot" label).
