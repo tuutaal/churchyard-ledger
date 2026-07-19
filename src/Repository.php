@@ -1319,8 +1319,8 @@ final class Repository
             return $result;
         }
 
-        if (!in_array($type, ['people', 'plots', 'interments'], true)) {
-            $result['message'] = 'Choose people, plots, or interments before importing.';
+        if (!in_array($type, ['people', 'plots', 'interments', 'plot_identifiers'], true)) {
+            $result['message'] = 'Choose a supported record type before importing.';
             return $result;
         }
 
@@ -1366,6 +1366,7 @@ final class Repository
                 'people' => $this->importPersonRow($row),
                 'plots' => $this->importPlotRow($row),
                 'interments' => $this->importIntermentRow($row),
+                'plot_identifiers' => $this->importPlotIdentifierRow($row),
                 default => 'Unsupported import type.',
             };
 
@@ -1538,6 +1539,39 @@ final class Repository
         return null;
     }
 
+    /**
+     * Attaches an alternate identifier/label to an existing plot from a CSV row.
+     * Columns: plot_identifier (match an existing plot by any of its identifiers),
+     * value (the label value), optional scheme (default "plot"), is_primary.
+     * Purpose e.g.: bulk-load a "plot number" scheme onto plots already keyed by
+     * block/row or lot, once a burial register supplies the correspondence.
+     */
+    private function importPlotIdentifierRow(array $row): ?string
+    {
+        $match = trim((string) ($row['plot_identifier'] ?? ''));
+        $value = trim((string) ($row['value'] ?? ''));
+        $scheme = trim((string) ($row['scheme'] ?? '')) ?: 'plot';
+        if ($match === '') {
+            return 'plot_identifier is required (the existing plot to match).';
+        }
+        if ($value === '') {
+            return 'value is required.';
+        }
+
+        $plotId = $this->blankToNull($row['plot_id'] ?? null)
+            ?? $this->plotIdByIdentifier($match)
+            ?? $this->plotIdByLabel($match);
+        if ($plotId === null || $this->plot($plotId) === null) {
+            return 'No plot matched plot_identifier "' . $match . '".';
+        }
+
+        $isPrimary = in_array(strtolower(trim((string) ($row['is_primary'] ?? ''))), ['1', 'true', 'yes', 'y'], true);
+        if ($this->setPlotIdentifier($plotId, $scheme, $value, $isPrimary) === null) {
+            return 'Could not save the label (a plot may already use "' . $value . '" in scheme "' . $scheme . '").';
+        }
+        return null;
+    }
+
     private function importIntermentRow(array $row): ?string
     {
         $personId = $this->blankToNull($row['person_id'] ?? null);
@@ -1632,6 +1666,10 @@ final class Repository
             return in_array('identifier', $headers, true);
         }
 
+        if ($type === 'plot_identifiers') {
+            return in_array('plot_identifier', $headers, true) && in_array('value', $headers, true);
+        }
+
         return (in_array('person_id', $headers, true) || in_array('person_name', $headers, true))
             && (in_array('plot_id', $headers, true) || in_array('plot_identifier', $headers, true));
     }
@@ -1642,6 +1680,7 @@ final class Repository
             'people' => 'People imports need a legal_name header.',
             'plots' => 'Plot imports need an identifier header.',
             'interments' => 'Interment imports need person_id or person_name, plus plot_id or plot_identifier.',
+            'plot_identifiers' => 'Identifier/label imports need plot_identifier (which existing plot to match) and value headers.',
             default => 'The CSV file is missing required headers.',
         };
     }

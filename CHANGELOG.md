@@ -22,6 +22,10 @@ This project follows a simple changelog format while the app is early in develop
 - Section labels on the plot map now position from each section's actual rendered geometry instead of a fixed per-section grid slot, so sections stay correctly labeled when image-aligned plot geometry is mixed with auto-laid-out plots.
 - The `/map` viewer now renders plots whose geometry is in a shared world coordinate system (`{"space":"world_feet","points":[...]}`) as one unified, real-world-proportioned map (fitted to the view, north up), with each section shown as a toggleable layer (frames, labels, and per-area checkboxes) and per-plot labels revealed only when zoomed in. This is the coordinate substrate for later GPS/drone-surveyed geometry, which can replace the feet coordinates without changing records. Installs without world geometry keep the previous per-section auto-layout.
 - The `/map` viewer draws a plot's graves as dots distributed inside the plot boundary (shown when zoomed in), occupied graves linking to the person and empty graves drawn hollow — using `Repository::mapGraves()`, so no stored per-grave coordinates are needed. Section labels moved to the south end of each area so tall sections don't hide them under the toolbar.
+
+### Added
+
+- Added a `plot_identifiers` CSV import on `/imports` for bulk-attaching alternate identifiers/labels to existing plots (headers: `plot_identifier,scheme,value,is_primary`). Each row matches an existing plot by any of its identifiers and adds a labelled value in the given scheme (default `plot`) — e.g. loading a "plot number" scheme onto plots already keyed by block/row or lot. Unmatched rows are reported, not guessed.
 - Fixed the admin map-boundary editor and the internal `/map` viewer to render the uploaded background image with `preserveAspectRatio="xMidYMid meet"` instead of `slice`, so the full image is shown without cropping — needed for pixel-accurate tracing/grid generation against a scanned map.
 
 ### Schema

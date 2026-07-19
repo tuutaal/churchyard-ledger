@@ -1591,6 +1591,7 @@ final class App
             'people' => 'legal_name,given_name,family_name,maiden_name,birth_date_text,death_date_text,alternate_names,visibility,confidence,notes',
             'plots' => 'identifier,section_code,row_label,lot,status,visibility,confidence,notes',
             'interments' => 'person_name,plot_identifier,disposition_type,interment_date_text,burial_permit_number,plot_position,marker_transcription,visibility,confidence,notes,photo_url',
+            'plot_identifiers' => 'plot_identifier,scheme,value,is_primary',
         ];
 
         ob_start();
@@ -1618,7 +1619,7 @@ final class App
                 <?php endif; ?>
             <?php endif; ?>
             <form class="form record-form" method="post" enctype="multipart/form-data">
-                <?= $this->select('import_type', 'Record type', (string) ($_POST['import_type'] ?? 'people'), ['people', 'plots', 'interments']) ?>
+                <?= $this->select('import_type', 'Record type', (string) ($_POST['import_type'] ?? 'people'), ['people', 'plots', 'interments', 'plot_identifiers']) ?>
                 <label>CSV file <input name="csv_file" type="file" accept=".csv,text/csv" required></label>
                 <div class="actions full">
                     <button class="button" type="submit">Import CSV</button>
