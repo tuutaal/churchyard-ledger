@@ -302,6 +302,7 @@ final class App
                         <?php endif; ?>
                     <?php endforeach; ?>
                 </div>
+                <div class="gis-layer-filters" aria-label="Map areas"></div>
             </div>
             <div class="gis-controls" aria-label="Map controls">
                 <button type="button" data-map-action="zoom-in" aria-label="Zoom in">+</button>
@@ -363,6 +364,12 @@ final class App
                 svg.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`);
             }
 
+            let lastShowLabels = null;
+            function refreshLabels() {
+                const show = viewBox.w < 520;
+                if (show !== lastShowLabels) { lastShowLabels = show; render(); }
+            }
+
             function zoom(multiplier) {
                 const cx = viewBox.x + viewBox.w / 2;
                 const cy = viewBox.y + viewBox.h / 2;
@@ -371,6 +378,7 @@ final class App
                 viewBox.x = cx - viewBox.w / 2;
                 viewBox.y = cy - viewBox.h / 2;
                 setViewBox();
+                refreshLabels();
             }
 
             function resetView() {
@@ -449,21 +457,58 @@ final class App
                 return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
             }
 
+            // Areas (sections) as toggleable layers, with their bounding frames.
+            const areas = [];
+            const areaByCode = {};
+            plots.forEach((plot) => {
+                const code = plot.section || 'Unsectioned';
+                let a = areaByCode[code];
+                if (!a) {
+                    a = areaByCode[code] = { code, minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity, labelX: plot.sectionLabelX, labelY: plot.sectionLabelY, enabled: true };
+                    areas.push(a);
+                }
+                plot.points.forEach((p) => {
+                    a.minX = Math.min(a.minX, p[0]); a.maxX = Math.max(a.maxX, p[0]);
+                    a.minY = Math.min(a.minY, p[1]); a.maxY = Math.max(a.maxY, p[1]);
+                });
+            });
+
+            const layerBox = shell.querySelector('.gis-layer-filters');
+            if (layerBox) {
+                areas.forEach((a) => {
+                    const label = document.createElement('label');
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox'; cb.checked = true; cb.value = a.code;
+                    cb.addEventListener('change', () => { a.enabled = cb.checked; render(); });
+                    label.appendChild(cb);
+                    label.appendChild(document.createTextNode(' ' + a.code));
+                    layerBox.appendChild(label);
+                });
+            }
+
             function render() {
                 const term = (search.value || '').trim().toLowerCase();
                 const enabled = new Set(filters.filter((filter) => filter.checked).map((filter) => filter.value));
                 content.innerHTML = '';
-                const sections = new Set();
+                // Show per-plot identifiers only when zoomed in enough to read them.
+                const showLabels = viewBox.w < 520;
+
+                areas.forEach((a) => {
+                    if (!a.enabled || !isFinite(a.minX)) return;
+                    const frame = document.createElementNS(ns, 'rect');
+                    frame.setAttribute('class', 'gis-area-frame');
+                    frame.setAttribute('x', a.minX - 12); frame.setAttribute('y', a.minY - 26);
+                    frame.setAttribute('width', (a.maxX - a.minX) + 24); frame.setAttribute('height', (a.maxY - a.minY) + 38);
+                    content.appendChild(frame);
+                    const label = document.createElementNS(ns, 'text');
+                    label.setAttribute('x', a.minX - 8); label.setAttribute('y', a.minY - 30);
+                    label.setAttribute('class', 'gis-section-label');
+                    label.textContent = a.code;
+                    content.appendChild(label);
+                });
+
                 plots.forEach((plot) => {
-                    if (plot.section && !sections.has(plot.section)) {
-                        sections.add(plot.section);
-                        const label = document.createElementNS(ns, 'text');
-                        label.setAttribute('x', plot.sectionLabelX);
-                        label.setAttribute('y', plot.sectionLabelY);
-                        label.setAttribute('class', 'gis-section-label');
-                        label.textContent = plot.section;
-                        content.appendChild(label);
-                    }
+                    if (!(areaByCode[plot.section] || { enabled: true }).enabled) return;
                     const visible = plotMatches(plot, term, enabled);
                     const group = document.createElementNS(ns, 'g');
                     group.setAttribute('class', `gis-plot status-${plot.status}${selectedId === plot.id ? ' selected' : ''}${visible ? '' : ' hidden'}`);
@@ -472,19 +517,15 @@ final class App
                     group.setAttribute('aria-label', `${plot.identifier} ${plot.statusLabel}`);
                     const polygon = document.createElementNS(ns, 'polygon');
                     polygon.setAttribute('points', polygonPoints(plot));
-                    const label = document.createElementNS(ns, 'text');
-                    label.setAttribute('x', plot.labelX);
-                    label.setAttribute('y', plot.labelY);
-                    label.setAttribute('class', 'gis-plot-label');
-                    label.textContent = plot.identifier;
-                    const sublabel = document.createElementNS(ns, 'text');
-                    sublabel.setAttribute('x', plot.labelX);
-                    sublabel.setAttribute('y', plot.labelY + 18);
-                    sublabel.setAttribute('class', 'gis-plot-sublabel');
-                    sublabel.textContent = plot.lot ? `Lot ${plot.lot}` : plot.statusLabel;
                     group.appendChild(polygon);
-                    group.appendChild(label);
-                    group.appendChild(sublabel);
+                    if (showLabels || selectedId === plot.id) {
+                        const label = document.createElementNS(ns, 'text');
+                        label.setAttribute('x', plot.labelX);
+                        label.setAttribute('y', plot.labelY);
+                        label.setAttribute('class', 'gis-plot-label');
+                        label.textContent = plot.identifier;
+                        group.appendChild(label);
+                    }
                     group.addEventListener('click', () => selectPlot(plot));
                     group.addEventListener('keydown', (event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
@@ -561,64 +602,109 @@ final class App
         return (string) ob_get_clean();
     }
 
+    /**
+     * Builds the renderable plot features. Plots whose geometry is in the shared
+     * world coordinate system ({"space":"world_feet"}) are fitted together into
+     * the viewBox as one unified, real-world-proportioned map (Y flipped so
+     * north is up). This is the coordinate substrate a later GPS/drone survey
+     * replaces without changing any records. Plots without world geometry fall
+     * back to the older per-section auto-layout so nothing disappears.
+     */
     private function mapFeatures(array $plots, array $markersByPlot = []): array
     {
-        $sections = [];
+        $viewW = 1600;
+        $viewH = 1000;
+        $margin = 70;
+
+        // Pass 1: collect world-feet geometry and its global bounds.
+        $world = [];
+        $minX = $minY = INF;
+        $maxX = $maxY = -INF;
         foreach ($plots as $plot) {
-            $section = trim((string) ($plot['section_code'] ?? '')) !== '' ? 'Section ' . $plot['section_code'] : 'Unsectioned';
-            $sections[$section][] = $plot;
+            $geometry = json_decode((string) ($plot['geometry'] ?? ''), true);
+            $pts = null;
+            if (is_array($geometry) && ($geometry['space'] ?? '') === 'world_feet' && isset($geometry['points'])) {
+                $pts = $this->validMapPoints($geometry['points']);
+            }
+            $world[(string) $plot['id']] = $pts ?: null;
+            if ($pts) {
+                foreach ($pts as $p) {
+                    $minX = min($minX, $p[0]);
+                    $maxX = max($maxX, $p[0]);
+                    $minY = min($minY, $p[1]);
+                    $maxY = max($maxY, $p[1]);
+                }
+            }
         }
 
+        $hasWorld = $maxX > $minX && $maxY > $minY;
+        $scale = $hasWorld ? min(($viewW - 2 * $margin) / ($maxX - $minX), ($viewH - 2 * $margin) / ($maxY - $minY)) : 1.0;
+        $offX = $hasWorld ? ($viewW - ($maxX - $minX) * $scale) / 2 : 0;
+        $offY = $hasWorld ? ($viewH - ($maxY - $minY) * $scale) / 2 : 0;
+
+        // Per-section indices for the non-world fallback layout (old behaviour,
+        // used when a plot/install has no world geometry yet).
+        $sectionIndexMap = [];
+        $sectionCounter = [];
+        foreach ($plots as $plot) {
+            $section = trim((string) ($plot['section_code'] ?? '')) !== '' ? (string) $plot['section_code'] : 'Unsectioned';
+            if (!isset($sectionIndexMap[$section])) {
+                $sectionIndexMap[$section] = count($sectionIndexMap);
+                $sectionCounter[$section] = 0;
+            }
+        }
+
+        // Pass 2: build features, transforming world feet -> viewBox (north up).
         $features = [];
-        $sectionIndex = 0;
-        foreach ($sections as $section => $sectionPlots) {
-            $baseX = 140 + ($sectionIndex % 2) * 720;
-            $baseY = 140 + intdiv($sectionIndex, 2) * 360;
-            $sectionIndex++;
-
-            $sectionFeatures = [];
-            $sectionMinX = null;
-            $sectionMinY = null;
-            foreach (array_values($sectionPlots) as $index => $plot) {
-                $points = $this->plotPoints($plot, $index, $baseX, $baseY);
-                $xs = array_column($points, 0);
-                $ys = array_column($points, 1);
-                $labelX = min($xs) + 8;
-                $labelY = min($ys) + 22;
-                $sectionMinX = $sectionMinX === null ? min($xs) : min($sectionMinX, min($xs));
-                $sectionMinY = $sectionMinY === null ? min($ys) : min($sectionMinY, min($ys));
-                $names = trim((string) ($plot['interment_names'] ?? ''));
-                $location = array_filter([
-                    ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
-                    ($plot['lot'] ?? '') !== '' ? 'Lot ' . $plot['lot'] : '',
-                ]);
-                $status = (string) ($plot['status'] ?? 'unknown');
-                $sectionFeatures[] = [
-                    'id' => (string) $plot['id'],
-                    'identifier' => (string) $plot['identifier'],
-                    'section' => $section,
-                    'row' => (string) ($plot['row_label'] ?? ''),
-                    'lot' => (string) ($plot['lot'] ?? ''),
-                    'location' => $location ? implode(' / ', $location) : '',
-                    'status' => $status,
-                    'statusLabel' => pretty($status),
-                    'visibilityLabel' => pretty((string) ($plot['visibility'] ?? 'unknown')),
-                    'confidenceLabel' => pretty((string) ($plot['confidence'] ?? 'unknown')),
-                    'names' => $names,
-                    'labelX' => $labelX,
-                    'labelY' => $labelY,
-                    'points' => $points,
-                    'markers' => $markersByPlot[(string) $plot['id']] ?? [],
-                ];
+        $sectionMin = [];
+        foreach ($plots as $plot) {
+            $id = (string) $plot['id'];
+            $section = trim((string) ($plot['section_code'] ?? '')) !== '' ? (string) $plot['section_code'] : 'Unsectioned';
+            if ($world[$id] !== null && $hasWorld) {
+                $points = array_map(static fn ($p) => [
+                    (int) round($offX + ($p[0] - $minX) * $scale),
+                    (int) round($viewH - $offY - ($p[1] - $minY) * $scale),
+                ], $world[$id]);
+            } else {
+                $si = $sectionIndexMap[$section];
+                $baseX = 140 + ($si % 2) * 720;
+                $baseY = 140 + intdiv($si, 2) * 360;
+                $points = $this->plotPoints($plot, $sectionCounter[$section]++, $baseX, $baseY);
             }
 
-            $sectionLabelX = $sectionMinX ?? $baseX;
-            $sectionLabelY = ($sectionMinY ?? $baseY + 24) - 24;
-            foreach ($sectionFeatures as $feature) {
-                $feature['sectionLabelX'] = $sectionLabelX;
-                $feature['sectionLabelY'] = $sectionLabelY;
-                $features[] = $feature;
-            }
+            $xs = array_column($points, 0);
+            $ys = array_column($points, 1);
+            $status = (string) ($plot['status'] ?? 'unknown');
+            $location = array_filter([
+                ($plot['row_label'] ?? '') !== '' ? 'Row ' . $plot['row_label'] : '',
+                ($plot['lot'] ?? '') !== '' ? 'Lot ' . $plot['lot'] : '',
+            ]);
+
+            $features[] = [
+                'id' => $id,
+                'identifier' => (string) $plot['identifier'],
+                'section' => $section,
+                'row' => (string) ($plot['row_label'] ?? ''),
+                'lot' => (string) ($plot['lot'] ?? ''),
+                'location' => $location ? implode(' / ', $location) : '',
+                'status' => $status,
+                'statusLabel' => pretty($status),
+                'visibilityLabel' => pretty((string) ($plot['visibility'] ?? 'unknown')),
+                'confidenceLabel' => pretty((string) ($plot['confidence'] ?? 'unknown')),
+                'names' => trim((string) ($plot['interment_names'] ?? '')),
+                'labelX' => min($xs) + 4,
+                'labelY' => min($ys) + 14,
+                'points' => $points,
+                'markers' => $markersByPlot[$id] ?? [],
+            ];
+
+            $sectionMin[$section] ??= [min($xs), min($ys)];
+            $sectionMin[$section] = [min($sectionMin[$section][0], min($xs)), min($sectionMin[$section][1], min($ys))];
+        }
+
+        foreach ($features as &$feature) {
+            $feature['sectionLabelX'] = $sectionMin[$feature['section']][0];
+            $feature['sectionLabelY'] = $sectionMin[$feature['section']][1] - 10;
         }
 
         return $features;

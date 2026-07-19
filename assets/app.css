@@ -572,6 +572,35 @@ h1 {
   pointer-events: none;
 }
 
+.gis-area-frame {
+  fill: rgba(255, 255, 255, 0.35);
+  stroke: #9fb0a8;
+  stroke-width: 1.5;
+  stroke-dasharray: 7 6;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.gis-layer-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: center;
+  padding-left: 14px;
+  margin-left: 6px;
+  border-left: 1px solid #d7ddd3;
+}
+
+.gis-layer-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #33443c;
+  white-space: nowrap;
+}
+
 .gis-attribution {
   position: absolute;
   right: 14px;

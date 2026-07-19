@@ -20,6 +20,7 @@ This project follows a simple changelog format while the app is early in develop
 - Added `Repository::upsertPlot()`, `upsertPerson()`, `upsertInterment()`, and `upsertSection()` as find-or-create helpers that preserve admin-curated fields on update, for use by CLI importers.
 - Added `Repository::attachPhotoFromPath()`, refactored out of the existing upload handler, so both the web upload form and CLI importers store grave photos the same way.
 - Section labels on the plot map now position from each section's actual rendered geometry instead of a fixed per-section grid slot, so sections stay correctly labeled when image-aligned plot geometry is mixed with auto-laid-out plots.
+- The `/map` viewer now renders plots whose geometry is in a shared world coordinate system (`{"space":"world_feet","points":[...]}`) as one unified, real-world-proportioned map (fitted to the view, north up), with each section shown as a toggleable layer (frames, labels, and per-area checkboxes) and per-plot labels revealed only when zoomed in. This is the coordinate substrate for later GPS/drone-surveyed geometry, which can replace the feet coordinates without changing records. Installs without world geometry keep the previous per-section auto-layout.
 - Fixed the admin map-boundary editor and the internal `/map` viewer to render the uploaded background image with `preserveAspectRatio="xMidYMid meet"` instead of `slice`, so the full image is shown without cropping — needed for pixel-accurate tracing/grid generation against a scanned map.
 
 ### Schema
