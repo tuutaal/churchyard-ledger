@@ -1743,6 +1743,20 @@ final class App
 
         $message = '';
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $action = (string) ($_POST['action'] ?? 'save_plot');
+            if ($action === 'add_identifier' && $id !== null) {
+                $this->repository->setPlotIdentifier($id, (string) ($_POST['scheme'] ?? ''), (string) ($_POST['value'] ?? ''), !empty($_POST['is_primary']));
+                header('Location: /plots/' . rawurlencode($id) . '/edit?saved=label');
+                return '';
+            }
+            if ($action === 'add_grave' && $id !== null) {
+                $this->repository->upsertGrave($id, (string) ($_POST['label'] ?? ''), [
+                    'status' => (string) ($_POST['grave_status'] ?? 'unknown'),
+                    'visibility' => (string) ($plot['visibility'] ?? 'private'),
+                ]);
+                header('Location: /plots/' . rawurlencode($id) . '/edit?saved=grave');
+                return '';
+            }
             $savedId = $this->repository->savePlot($id, $_POST);
             if ($savedId !== null) {
                 header('Location: /plots/' . rawurlencode($savedId) . '/edit?saved=1');
@@ -1752,6 +1766,10 @@ final class App
             $plot = $_POST;
         } elseif (($_GET['saved'] ?? '') === '1') {
             $message = 'Plot record saved.';
+        } elseif (($_GET['saved'] ?? '') === 'label') {
+            $message = 'Label saved.';
+        } elseif (($_GET['saved'] ?? '') === 'grave') {
+            $message = 'Grave saved.';
         }
 
         ob_start();
@@ -1761,7 +1779,7 @@ final class App
             <h1><?= $id === null ? 'Add plot' : 'Edit plot' ?></h1>
             <?php if ($message): ?><div class="notice"><?= e($message) ?></div><?php endif; ?>
             <form class="form record-form" method="post">
-                <label>Plot identifier <input name="identifier" value="<?= e($plot['identifier'] ?? '') ?>" required></label>
+                <label>Primary identifier <input name="identifier" value="<?= e($plot['identifier'] ?? '') ?>" required></label>
                 <label>Section
                     <select name="section_id">
                         <option value="">No section</option>
@@ -1783,6 +1801,74 @@ final class App
                 </div>
             </form>
         </section>
+        <?php if ($id !== null): ?>
+            <?php
+            $identifiers = $this->repository->plotIdentifiers($id);
+            $schemes = ['plot' => 'Plot number', 'block_row' => 'Block / Row', 'lot' => 'Lot', 'section' => 'Section', 'other' => 'Other'];
+            ?>
+            <section class="panel">
+                <h2>Identifiers &amp; labels</h2>
+                <p class="lede">This plot can be found by any of these. Church cemeteries often mix numbering systems, so a plot may have a plot number, a block/row label, and a lot label at once.</p>
+                <?php if ($identifiers): ?>
+                    <table class="table">
+                        <thead><tr><th>Scheme</th><th>Value</th><th>Primary</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($identifiers as $ident): ?>
+                            <tr>
+                                <td><?= e($schemes[$ident['scheme']] ?? $ident['scheme']) ?></td>
+                                <td><?= e($ident['value']) ?></td>
+                                <td><?= $ident['is_primary'] ? '★ primary' : '' ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p class="card-detail">No extra labels yet. The primary identifier above still applies.</p>
+                <?php endif; ?>
+                <form class="form record-form" method="post">
+                    <input type="hidden" name="action" value="add_identifier">
+                    <label>Scheme
+                        <select name="scheme">
+                            <?php foreach ($schemes as $key => $label): ?>
+                                <option value="<?= e($key) ?>"><?= e($label) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <label>Value <input name="value" placeholder="e.g. 134"></label>
+                    <label class="checkbox"><input type="checkbox" name="is_primary"> Make primary</label>
+                    <button class="button" type="submit">Add / update label</button>
+                </form>
+            </section>
+            <?php
+            $graves = $this->repository->graves($id);
+            ?>
+            <section class="panel">
+                <h2>Graves</h2>
+                <p class="lede">Individual burial spaces within this plot &mdash; e.g. 134a and 134b for a two-grave family plot, plus separate spaces for cremation urns. Each can be sold and interred independently.</p>
+                <?php if ($graves): ?>
+                    <table class="table">
+                        <thead><tr><th>Grave</th><th>Status</th><th>Occupant</th></tr></thead>
+                        <tbody>
+                        <?php foreach ($graves as $grave): ?>
+                            <tr>
+                                <td><?= e($grave['label']) ?></td>
+                                <td><?= e(pretty((string) $grave['status'])) ?></td>
+                                <td><?php if (!empty($grave['occupant_name'])): ?><a href="/interments/<?= e($grave['interment_id']) ?>/edit"><?= e($grave['occupant_name']) ?></a><?php else: ?><span class="card-detail">Empty</span><?php endif; ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php else: ?>
+                    <p class="card-detail">No graves recorded in this plot yet.</p>
+                <?php endif; ?>
+                <form class="form record-form" method="post">
+                    <input type="hidden" name="action" value="add_grave">
+                    <label>Grave label <input name="label" placeholder="e.g. 134a"></label>
+                    <?= $this->select('grave_status', 'Status', 'unknown', ['available', 'reserved', 'occupied', 'sold', 'unknown', 'unusable', 'needs_verification']) ?>
+                    <button class="button" type="submit">Add / update grave</button>
+                </form>
+            </section>
+        <?php endif; ?>
         <?php
         return (string) ob_get_clean();
     }
@@ -1833,6 +1919,19 @@ final class App
                             <option value="<?= e($plot['id']) ?>"<?= ($interment['plot_id'] ?? '') === $plot['id'] ? ' selected' : '' ?>><?= e($plot['identifier']) ?></option>
                         <?php endforeach; ?>
                     </select>
+                </label>
+                <?php $graves = !empty($interment['plot_id']) ? $this->repository->graves((string) $interment['plot_id']) : []; ?>
+                <label>Grave
+                    <?php if ($graves): ?>
+                        <select name="grave_id">
+                            <option value="">Whole plot / unspecified</option>
+                            <?php foreach ($graves as $grave): ?>
+                                <option value="<?= e($grave['id']) ?>"<?= ($interment['grave_id'] ?? '') === $grave['id'] ? ' selected' : '' ?>><?= e($grave['label']) ?> (<?= e(pretty((string) $grave['status'])) ?>)</option>
+                            <?php endforeach; ?>
+                        </select>
+                    <?php else: ?>
+                        <input value="Save with a plot first to pick a grave" disabled>
+                    <?php endif; ?>
                 </label>
                 <?= $this->select('disposition_type', 'Casket or cremains', $interment['disposition_type'] ?? 'unknown', ['unknown', 'casket', 'cremains', 'other']) ?>
                 <label>Interment date text <input name="interment_date_text" value="<?= e($interment['interment_date_text'] ?? '') ?>" placeholder="June 1946 or unknown"></label>

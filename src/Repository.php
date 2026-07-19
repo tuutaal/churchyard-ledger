@@ -1037,6 +1037,7 @@ final class Repository
             'id' => $id,
             'cemetery_id' => $this->cemeteryId(),
             'plot_id' => $this->blankToNull($data['plot_id'] ?? null),
+            'grave_id' => $this->blankToNull($data['grave_id'] ?? null),
             'person_id' => trim((string) $data['person_id']),
             'disposition_type' => $this->allowed($data['disposition_type'] ?? '', ['unknown', 'casket', 'cremains', 'other'], 'unknown'),
             'interment_date_text' => $this->blankToNull($data['interment_date_text'] ?? null),
@@ -1050,16 +1051,16 @@ final class Repository
 
         try {
             if ($this->interment($id)) {
-                $sql = 'update interments set plot_id = :plot_id, person_id = :person_id, disposition_type = :disposition_type,
+                $sql = 'update interments set plot_id = :plot_id, grave_id = :grave_id, person_id = :person_id, disposition_type = :disposition_type,
                     interment_date_text = :interment_date_text, burial_permit_number = :burial_permit_number,
                     marker_transcription = :marker_transcription, plot_position = :plot_position, notes = :notes,
                     visibility = :visibility, confidence = :confidence where id = :id';
                 $this->db->prepare($sql)->execute(array_diff_key($values, ['cemetery_id' => true]));
                 $this->audit('update', 'Interment', $id, 'Updated interment record');
             } else {
-                $sql = 'insert into interments (id, cemetery_id, plot_id, person_id, disposition_type, interment_date_text,
+                $sql = 'insert into interments (id, cemetery_id, plot_id, grave_id, person_id, disposition_type, interment_date_text,
                     burial_permit_number, marker_transcription, plot_position, notes, visibility, confidence)
-                    values (:id, :cemetery_id, :plot_id, :person_id, :disposition_type, :interment_date_text,
+                    values (:id, :cemetery_id, :plot_id, :grave_id, :person_id, :disposition_type, :interment_date_text,
                     :burial_permit_number, :marker_transcription, :plot_position, :notes, :visibility, :confidence)';
                 $this->db->prepare($sql)->execute($values);
                 $this->audit('create', 'Interment', $id, 'Created interment record');
